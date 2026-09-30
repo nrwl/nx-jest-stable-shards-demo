@@ -15,7 +15,6 @@ concurrency:
 # Identical on the main job and every agent, since all of it feeds task hashes.
 env:
   NX_CLOUD_ACCESS_TOKEN: ${{ secrets.NX_CLOUD_ACCESS_TOKEN }}
-  NX_DAEMON: false
   NX_LEGACY_AFFECTED: false
   FIXTURE_WORK_SCALE: '0.1'
   GRAPH_CACHE_BRANCH: ${{ github.base_ref || github.ref_name }}
