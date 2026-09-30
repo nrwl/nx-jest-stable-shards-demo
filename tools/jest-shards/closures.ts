@@ -1,5 +1,6 @@
 import { cruise } from 'dependency-cruiser';
 import extractTSConfig from 'dependency-cruiser/config-utl/extract-ts-config';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ShardOptions } from './buckets.ts';
 
@@ -25,7 +26,13 @@ export async function importClosures(
       doNotFollow: { path: 'node_modules' },
       // Only the module graph is needed; this halves a cold run at 21k tests.
       skipAnalysisNotInRules: true,
-      cache: { folder: join(workspaceRoot, '.nx/depcruise'), strategy: 'content' },
+      // `metadata` asks git what changed instead of hashing every file (an
+      // unknown cached commit, as in a shallow clone, means a full run); it
+      // needs a git repository, so anything else hashes contents.
+      cache: {
+        folder: join(workspaceRoot, '.nx/depcruise'),
+        strategy: existsSync(join(workspaceRoot, '.git')) ? 'metadata' : 'content',
+      },
       ...(resolve.tsConfig ? { tsConfig: { fileName: resolve.tsConfig } } : {}),
     },
     { alias },
