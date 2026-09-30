@@ -111,7 +111,7 @@ Member tests, snapshots, owner config and shared inputs are never capped. Every 
 
 ```sh
 node --test tools/jest-shards/plugin.test.ts
-NX_DAEMON=false NX_NO_CLOUD=true node scripts/parity.ts
+node scripts/parity.ts
 ```
 
 Run the parity check after any change to Jest configs, the plugin, the options or the Nx version. Discovery reads the stock plugin's per-file target names, which is a version-coupled convention.
