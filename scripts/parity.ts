@@ -4,7 +4,7 @@
 // sequencer, and every Jest config on disk must have produced shards.
 import { createProjectGraphAsync, workspaceRoot } from '@nx/devkit';
 import { createNodes as stockJest } from '@nx/jest/plugin';
-import { minimatch } from 'minimatch';
+import { Minimatch } from 'minimatch';
 import { execFile } from 'node:child_process';
 import { globSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
@@ -57,10 +57,14 @@ for (const node of Object.values(graph.nodes)) {
     const byShard = await Promise.all(
       shards.map(async ([name, target]) => {
         const shardArg = target.options.command.match(/--shard=\S+/)[0];
-        const members = (target.inputs as unknown[]).filter(
-          (i): i is string => typeof i === 'string' && i.startsWith(WS) && !/(^|[^\\])\*/.test(i),
-        );
-        const graphTests = all.filter((t) => members.some((m) => minimatch(t, m.slice(WS.length))));
+        // Member inputs are exact paths; only escaped odd paths need a glob match.
+        const members = (target.inputs as unknown[])
+          .filter((i): i is string => typeof i === 'string' && i.startsWith(WS))
+          .map((i) => i.slice(WS.length))
+          .filter((i) => !/(^|[^\\])\*/.test(i));
+        const exact = new Set(members.filter((m) => !/[?[\]{}!\\]/.test(m)));
+        const escaped = members.filter((m) => !exact.has(m)).map((m) => new Minimatch(m));
+        const graphTests = all.filter((t) => exact.has(t) || escaped.some((m) => m.match(t)));
         const jestTests = await listTests(root, ['-c', config, shardArg]);
         report(
           same(graphTests, jestTests),
