@@ -1,0 +1,5 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "nxCloudUrl": "https://staging.nx.app",
+  "nxCloudId": "6abd079f8ed7801d844670d5"
+}
