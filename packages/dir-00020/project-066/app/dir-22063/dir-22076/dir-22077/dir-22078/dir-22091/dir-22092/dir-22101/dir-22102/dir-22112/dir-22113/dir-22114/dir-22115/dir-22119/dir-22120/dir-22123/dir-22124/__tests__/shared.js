@@ -1,0 +1,1 @@
+module.exports = { dir: 'app/dir-22063/dir-22076/dir-22077/dir-22078/dir-22091/dir-22092/dir-22101/dir-22102/dir-22112/dir-22113/dir-22114/dir-22115/dir-22119/dir-22120/dir-22123/dir-22124/__tests__' };

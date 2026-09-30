@@ -8,10 +8,23 @@
       "options": {
         "testsPerShard": 25,
         "overrides": {},
-        "isolate": [],
-        "sharedInputs": ["{workspaceRoot}/tools/jest-shards/**/*"],
+        "isolate": ["packages/project-047/app/dir-18382/dir-18387/__tests__/test-04354.test.js"],
+        "sharedInputs": [
+          "{workspaceRoot}/jest.preset.js",
+          "{workspaceRoot}/tools/fixture/setup.js",
+          "{workspaceRoot}/tools/fixture/transform.js",
+          "{workspaceRoot}/**/__mocks__/**/*",
+          "{workspaceRoot}/tools/jest-shards/**/*",
+          {
+            "env": "FIXTURE_WORK_SCALE"
+          }
+        ],
         "maxClosureInputs": 1000,
-        "resolve": {}
+        "resolve": {
+          "alias": {
+            "@packages": "packages"
+          }
+        }
       }
     }
   ]

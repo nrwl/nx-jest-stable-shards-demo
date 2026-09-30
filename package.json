@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "fixture": "node scripts/generate-fixture.ts",
     "shard-targets": "node scripts/shard-targets.ts"
   },
   "devDependencies": {

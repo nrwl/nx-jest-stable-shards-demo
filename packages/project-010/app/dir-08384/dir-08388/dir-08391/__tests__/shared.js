@@ -1,0 +1,1 @@
+module.exports = { dir: 'app/dir-08384/dir-08388/dir-08391/__tests__' };

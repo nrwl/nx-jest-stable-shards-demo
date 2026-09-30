@@ -1,0 +1,13 @@
+jest.mock('../../../../../../api/two');
+const leaf = require('./test-00001.leaf');
+const api = require('@packages/dir-00020/project-068');
+const deps = require('../../../../../../deps');
+
+test('test-00001', () => {
+  const expected = 'test-00001';
+  burn(62796);
+  expect(leaf.value).toBe(expected);
+  expect(api.two()).toBe('mocked');
+  expect(deps).toHaveLength(8);
+  expect(api.name).toMatchSnapshot();
+});
