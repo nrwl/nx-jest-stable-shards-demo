@@ -53,7 +53,7 @@ Node 24 or later runs the TypeScript directly. The directory's `package.json` ma
 
 | Option             | Default | Meaning                                                                                                           |
 | ------------------ | ------- | ----------------------------------------------------------------------------------------------------------------- |
-| `testsPerShard`    | 25      | Upper bound on tests per hash bucket                                                                              |
+| `testsPerShard`    | 25      | Target maximum average tests per hash bucket                                                                      |
 | `overrides`        | `{}`    | Per-project `testsPerShard`, keyed by project root                                                                |
 | `isolate`          | `[]`    | Workspace-relative test paths that each get a shard of their own                                                  |
 | `sharedInputs`     | `[]`    | Inputs every shard gets. Exact JS/TS files listed here are cruised too, so their imports become shared inputs     |

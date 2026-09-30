@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface ShardOptions {
-  /** Upper bound on regular (non-isolated) tests per hash bucket. */
+  /** Target maximum average of regular (non-isolated) tests per hash bucket. */
   testsPerShard: number;
   /** Per-project `testsPerShard`, keyed by project root. */
   overrides: Record<string, { testsPerShard: number }>;

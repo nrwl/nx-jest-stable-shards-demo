@@ -15,7 +15,7 @@ const names = (n: number, prefix = 't') =>
 describe('bucket policy', () => {
   const options = normalizeOptions();
 
-  test('bucketCount is the smallest power of two with at most testsPerShard per bucket', () => {
+  test('bucketCount is the smallest power of two keeping the target maximum average tests per bucket', () => {
     const count = (n: number) => planShards('p', names(n), options).bucketCount;
     assert.deepEqual(
       [count(1), count(25), count(26), count(50), count(100), count(101)],
