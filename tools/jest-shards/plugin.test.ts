@@ -48,6 +48,21 @@ describe('bucket policy', () => {
     assert.equal(plan.shardOf.get('src/t7.test.js'), 3);
   });
 
+  test('invalid sizes and caps fail', () => {
+    assert.throws(
+      () => normalizeOptions({ testsPerShard: -1 }),
+      /testsPerShard must be a positive/,
+    );
+    assert.throws(() => normalizeOptions({ testsPerShard: 0 }), /testsPerShard must be a positive/);
+    assert.throws(
+      () => normalizeOptions({ overrides: { p: { testsPerShard: Infinity } } }),
+      /overrides\.p\.testsPerShard must be a positive/,
+    );
+    assert.throws(() => normalizeOptions({ maxClosureInputs: 1.5 }), /nonnegative integer/);
+    assert.throws(() => normalizeOptions({ maxClosureInputs: -1 }), /nonnegative integer/);
+    assert.doesNotThrow(() => normalizeOptions({ maxClosureInputs: 0 }));
+  });
+
   test('a duplicate isolate entry fails', () => {
     assert.throws(() => normalizeOptions({ isolate: ['a.test.js', 'a.test.js'] }), /twice/);
   });

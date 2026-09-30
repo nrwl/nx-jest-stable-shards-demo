@@ -31,6 +31,24 @@ export function normalizeOptions(raw: Partial<ShardOptions> = {}): ShardOptions 
   };
   const duplicate = options.isolate.find((path, i) => options.isolate.indexOf(path) !== i);
   if (duplicate) throw new Error(`jest-shards: isolate lists ${duplicate} twice`);
+  // A non-positive or non-finite size would never let bucketCount settle.
+  const sizes: [string, number][] = [
+    ['testsPerShard', options.testsPerShard],
+    ...Object.entries(options.overrides).map(([root, o]): [string, number] => [
+      `overrides.${root}.testsPerShard`,
+      o.testsPerShard,
+    ]),
+  ];
+  for (const [name, value] of sizes) {
+    if (!(Number.isFinite(value) && value > 0)) {
+      throw new Error(`jest-shards: ${name} must be a positive number, got ${value}`);
+    }
+  }
+  if (!(Number.isInteger(options.maxClosureInputs) && options.maxClosureInputs >= 0)) {
+    throw new Error(
+      `jest-shards: maxClosureInputs must be a nonnegative integer, got ${options.maxClosureInputs}`,
+    );
+  }
   return options;
 }
 
