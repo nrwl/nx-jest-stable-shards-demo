@@ -101,7 +101,8 @@ const leafOf = (test: string) => test.replace(/\.test\.[jt]s$/, '.leaf.js');
 const describe = (ids: string[]) => {
   if (ids.length === 0) return 'none';
   if (ids.length === all.length && ids.every((id, i) => id === all[i])) return `all ${ids.length}`;
-  return ids.join(', ');
+  if (ids.length <= 8) return ids.join(', ');
+  return `${ids.length} shards: ${ids.slice(0, 3).join(', ')}, ...`;
 };
 
 // Fixture picks. project-001 has 4 buckets and sits on the 100-test boundary;
@@ -194,7 +195,7 @@ const rows: Row[] = [
       if (name.endsWith('.json'))
         writeFileSync(
           file,
-          readFileSync(file, 'utf8').replace(/\n}\n$/, ',\n  "description": "edited"\n}\n'),
+          readFileSync(file, 'utf8').replace(/\n}\n$/, ',\n  "tags": ["edited"]\n}\n'),
         );
       else append(file);
       return [file];
