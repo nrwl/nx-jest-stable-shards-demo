@@ -81,7 +81,21 @@ Add a test to a project whose bucket count does not change: only the shard that 
 
 Task-based affected matches each changed file against each task's inputs. The acceptance matrix records every case locally on `23.3.0-beta.7`. Each row applies one change to the committed smoke fixture, asks `nx affected -t "$SHARD_TARGETS" --files=<changed files> --graph=stdout` which shards it selects, and then runs `nx run-many -t "$SHARD_TARGETS"` to see which shards miss the cache.
 
-The eight demo pull requests, one per case with its own CI run, come with the staging setup.
+Each case also has an open pull request against `main`. The PR's `dte.yml` run is the case: `nx affected` between the PR's base and head, on three agents, on `nx@23.3.0-beta.7`. "Expected" was computed locally before CI. The last column is the project-grained set that legacy affected (`NX_LEGACY_AFFECTED=true`) would select, for comparison.
+
+<!-- prettier-ignore -->
+| PR | Case | Expected on beta.7 | Actual in CI | Result | Legacy project-grained set |
+| --- | --- | --- | --- | --- | --- |
+| [#2](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/2) | Edit one test | `project-001:test-ci--04` | `project-001:test-ci--04` | green | 4 shards |
+| [#3](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/3) | Edit a leaf module | `project-001:test-ci--04` | `project-001:test-ci--04` | green | 4 shards |
+| [#4](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/4) | Edit a barrel | `project-001:test-ci--02` | `project-001:test-ci--02` | green | 4 shards |
+| [#5](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/5) | Edit a cross-project module | 55 shards | the same 55 shards | green | 63 shards |
+| [#6](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/6) | Add one test and delete another (combined) | `project-047:test-ci--04` | `project-047:test-ci--04` | green | 5 shards |
+| [#7](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/7) | Cross a bucket boundary (4 to 8) | `project-001:test-ci--06` | `project-001:test-ci--06` | green | 8 shards |
+| [#8](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/8) | Unrelated change (a project without tests) | none | none; all three agents exited on their own | green | none |
+| [#9](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/9) | One failing test | `project-008:test-ci--01`, failing | `project-008:test-ci--01` failed; main job red | red, as intended | 1 shard |
+
+In every PR run, all tasks ran on the agents and none on the main job. Each agent exited right after its last shard, or as soon as it had nothing to run, and the main job went on to `complete-ci-run` and its summary. Every job finished in under 2.5 minutes, against its 15-minute timeout.
 
 Results on `nx@23.3.0-beta.7`, run locally on the smoke fixture (476 tests in 64 shards) on Sep 30, 2026. "Expected" is the plan's rule followed by the task IDs the rule names for this fixture; the result compares them exactly.
 
