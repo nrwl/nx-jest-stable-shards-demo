@@ -107,13 +107,18 @@ async function targets(root: string, options: Partial<ShardOptions> = {}) {
   // The stock plugin resolves test paths against the working directory.
   const cwd = process.cwd();
   process.chdir(root);
-  const results = await createNodes[1](configs, { ...baseOptions, ...options }, context).finally(
-    () => process.chdir(cwd),
-  );
+  let results;
+  try {
+    results = await createNodes[1](configs, { ...baseOptions, ...options }, context);
+  } finally {
+    process.chdir(cwd);
+  }
   const byProject: Record<string, Record<string, TargetConfiguration>> = {};
   for (const [, result] of results) {
     for (const [projectRoot, project] of Object.entries(result.projects ?? {})) {
-      byProject[projectRoot] = project.targets ?? {};
+      byProject[projectRoot] = (
+        project as { targets: Record<string, TargetConfiguration> }
+      ).targets;
     }
   }
   return byProject;
