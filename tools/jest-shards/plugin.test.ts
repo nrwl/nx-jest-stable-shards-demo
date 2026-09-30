@@ -8,6 +8,8 @@ import { normalizeOptions, planShards, type ShardOptions } from './buckets.ts';
 import { createNodes } from './plugin.ts';
 import StableShardSequencer from './sequencer.ts';
 
+process.env.NX_DAEMON = 'false'; // the daemon's glob ignores these throwaway workspace roots
+
 const WS = '{workspaceRoot}/';
 const names = (n: number, prefix = 't') =>
   Array.from({ length: n }, (_, i) => `src/${prefix}${i}.test.js`);
