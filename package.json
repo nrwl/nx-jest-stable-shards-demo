@@ -26,5 +26,6 @@
     "nx": "23.3.0-beta.7",
     "prettier": "^3.9.9",
     "typescript": "~5.9.3"
-  }
+  },
+  "packageManager": "pnpm@12.8.1"
 }

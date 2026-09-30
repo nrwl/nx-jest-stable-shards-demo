@@ -1,0 +1,32 @@
+# Local checks with Nx Cloud off: install, typecheck, format, unit tests,
+# membership parity on the smoke fixture, and every shard once.
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  NX_NO_CLOUD: true
+  NX_DAEMON: false
+  NX_LEGACY_AFFECTED: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm format:check
+      - run: pnpm test:unit
+      - run: pnpm parity
+      - run: echo "SHARD_TARGETS=$(node scripts/shard-targets.ts)" >> "$GITHUB_ENV"
+      - run: pnpm exec nx run-many -t "$SHARD_TARGETS" --parallel 4

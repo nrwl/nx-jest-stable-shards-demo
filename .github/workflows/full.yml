@@ -1,0 +1,122 @@
+# The full simulation: every recorded test, 30 agents times --parallel=3, either
+# as stock per-file tasks or as stable shards. One run-many per execution; the
+# warm case is a rerun of the same mode at the same SHA. Label a run cold only
+# if its main log shows zero remote cache hits.
+name: full
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [per-file, sharded]
+        required: true
+
+concurrency:
+  group: full
+
+env:
+  NX_CLOUD_ACCESS_TOKEN: ${{ secrets.NX_CLOUD_ACCESS_TOKEN }}
+  NX_DAEMON: false
+  NX_LEGACY_AFFECTED: false
+  FIXTURE_WORK_SCALE: '1'
+
+jobs:
+  main:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/generate-fixture.ts --preset full
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .nx/depcruise
+            .nx/workspace-data
+          key: nx-graph-full-${{ inputs.mode }}-${{ github.sha }}
+          restore-keys: nx-graph-full-${{ inputs.mode }}-
+      - name: Per-file mode adds the stock @nx/jest plugin (not committed)
+        if: inputs.mode == 'per-file'
+        run: |
+          node -e "const f='nx.json',j=JSON.parse(require('fs').readFileSync(f));j.plugins.push({plugin:'@nx/jest/plugin',options:{ciTargetName:'test-ci-file'}});require('fs').writeFileSync(f,JSON.stringify(j,null,2))"
+          echo "TARGETS=test-ci-file" >> "$GITHUB_ENV"
+      - if: inputs.mode == 'sharded'
+        run: echo "TARGETS=$(node scripts/shard-targets.ts)" >> "$GITHUB_ENV"
+      - run: pnpm exec nx start-ci-run --distribute-on=manual --stop-agents-after="$TARGETS"
+      - name: Run all tests
+        run: |
+          set -o pipefail
+          pnpm exec nx run-many -t "$TARGETS" --parallel=3 | tee nx-output.txt
+      - name: Summary
+        if: always()
+        run: |
+          grep -Eo 'https://staging\.nx\.app/runs/[A-Za-z0-9]+' nx-output.txt | tail -1 || true
+          grep -E 'Successfully ran|Ran target|tasks? failed|Cache:|remote cache' nx-output.txt || true
+
+  agents:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      matrix:
+        agent:
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+          ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/generate-fixture.ts --preset full
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            .nx/depcruise
+            .nx/workspace-data
+          key: nx-graph-full-${{ inputs.mode }}-${{ github.sha }}
+          restore-keys: nx-graph-full-${{ inputs.mode }}-
+      - name: Per-file mode adds the stock @nx/jest plugin (not committed)
+        if: inputs.mode == 'per-file'
+        run: |
+          node -e "const f='nx.json',j=JSON.parse(require('fs').readFileSync(f));j.plugins.push({plugin:'@nx/jest/plugin',options:{ciTargetName:'test-ci-file'}});require('fs').writeFileSync(f,JSON.stringify(j,null,2))"
+      - run: pnpm exec nx start-agent
+        env:
+          NX_AGENT_NAME: agent-${{ matrix.agent }}

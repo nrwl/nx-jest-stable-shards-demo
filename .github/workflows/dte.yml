@@ -1,0 +1,88 @@
+# The 3-agent smoke on Nx Cloud manual DTE. A push to main runs every shard
+# (rerun the workflow at the same SHA for the warm case); a pull request runs
+# only the affected shards between its base and head.
+name: dte
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: dte-${{ github.ref }}
+  cancel-in-progress: true
+
+# Identical on the main job and every agent, since all of it feeds task hashes.
+env:
+  NX_CLOUD_ACCESS_TOKEN: ${{ secrets.NX_CLOUD_ACCESS_TOKEN }}
+  NX_DAEMON: false
+  NX_LEGACY_AFFECTED: false
+  FIXTURE_WORK_SCALE: '0.1'
+  GRAPH_CACHE_BRANCH: ${{ github.base_ref || github.ref_name }}
+
+jobs:
+  main:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .nx/depcruise
+            .nx/workspace-data
+          key: nx-graph-${{ env.GRAPH_CACHE_BRANCH }}-${{ github.sha }}
+          restore-keys: nx-graph-${{ env.GRAPH_CACHE_BRANCH }}-
+      - uses: nrwl/nx-set-shas@v4
+        if: github.event_name == 'pull_request'
+      - run: echo "SHARD_TARGETS=$(node scripts/shard-targets.ts)" >> "$GITHUB_ENV"
+      - run: pnpm exec nx start-ci-run --distribute-on=manual --stop-agents-after="$SHARD_TARGETS"
+      # Exactly one Nx command names the shard targets: the stop condition is
+      # met when the first such command finishes.
+      - name: Run shards
+        run: |
+          set -o pipefail
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            pnpm exec nx affected -t "$SHARD_TARGETS" --parallel=3 --base="$NX_BASE" --head="$NX_HEAD" | tee nx-output.txt
+          else
+            pnpm exec nx run-many -t "$SHARD_TARGETS" --parallel=3 | tee nx-output.txt
+          fi
+      - name: Summary
+        if: always()
+        run: |
+          grep -Eo 'https://staging\.nx\.app/runs/[A-Za-z0-9]+' nx-output.txt | tail -1 || true
+          grep -E 'Successfully ran|Ran target|No tasks were run|tasks? failed|Cache:' nx-output.txt || true
+
+  agents:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        agent: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            .nx/depcruise
+            .nx/workspace-data
+          key: nx-graph-${{ env.GRAPH_CACHE_BRANCH }}-${{ github.sha }}
+          restore-keys: nx-graph-${{ env.GRAPH_CACHE_BRANCH }}-
+      - run: echo "SHARD_TARGETS=$(node scripts/shard-targets.ts)" >> "$GITHUB_ENV"
+      - run: pnpm exec nx start-agent
+        env:
+          NX_AGENT_NAME: agent-${{ matrix.agent }}
