@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
   "nxCloudUrl": "https://staging.nx.app",
-  "nxCloudId": "6abd079f8ed7801d844670d5",
+  "nxCloudId": "6abd0d21a00579f536708056",
   "plugins": [
     {
       "plugin": "./tools/jest-shards/plugin.ts",
