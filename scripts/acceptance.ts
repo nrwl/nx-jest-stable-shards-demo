@@ -9,18 +9,26 @@ import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative } from 'node:path';
 
+// This run's own task cache and task database: results recorded for the same
+// edits by an earlier run would turn the expected misses into hits.
+const runDir = mkdtempSync(join(tmpdir(), 'acceptance-'));
+process.on('exit', () => rmSync(runDir, { recursive: true, force: true }));
 const env = {
   ...process.env,
   NX_NO_CLOUD: 'true',
   NX_DAEMON: 'false',
   NX_LEGACY_AFFECTED: 'false',
+  NX_CACHE_DIRECTORY: join(runDir, 'cache'),
+  NX_WORKSPACE_DATA_DIRECTORY: join(runDir, 'workspace-data'),
 };
 const WS = '{workspaceRoot}/';
 
