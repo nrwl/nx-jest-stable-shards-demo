@@ -67,7 +67,7 @@ jobs:
         if: always()
         run: |
           grep -Eo 'https://staging\.nx\.app/runs/[A-Za-z0-9]+' nx-output.txt | tail -1 || true
-          grep -E 'Successfully ran|Ran target|tasks? failed|Cache:|remote cache' nx-output.txt || true
+          grep -E 'Successfully ran|Ran target|tasks? failed|Cache:|remote cache|Successful Tasks|Failed Tasks|Cached Tasks|Total Executed Tasks' nx-output.txt || true
 
   agents:
     runs-on: ubuntu-latest
