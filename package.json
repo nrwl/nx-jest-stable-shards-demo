@@ -12,7 +12,8 @@
     "test:unit": "node --test tools/jest-shards/plugin.test.ts",
     "fixture": "node scripts/generate-fixture.ts",
     "shard-targets": "node scripts/shard-targets.ts",
-    "parity": "node scripts/parity.ts"
+    "parity": "node scripts/parity.ts",
+    "acceptance": "node scripts/acceptance.ts"
   },
   "devDependencies": {
     "@jest/test-sequencer": "29.7.0",
