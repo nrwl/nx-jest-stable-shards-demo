@@ -33,7 +33,7 @@ Which shape is fastest on 30 agents is a measurement, not a claim; see item 7.
 See the shards of one project, their commands and their inputs:
 
 ```sh
-NX_DAEMON=false NX_NO_CLOUD=true pnpm exec nx show project project-001 --json
+pnpm exec nx show project project-001 --json
 ```
 
 Each `test-ci--kk` target runs `jest -c jest.config.js --shard=k/shardCount --runInBand --coverage=false --watch=false` in the project root. The command never names tests; membership lives only in `inputs`:
@@ -56,7 +56,7 @@ The plugin decides membership at graph time; Jest decides it at run time through
 - every `jest.config.*` on disk produced shards.
 
 ```sh
-NX_DAEMON=false NX_NO_CLOUD=true node scripts/parity.ts
+node scripts/parity.ts
 ```
 
 ```text
@@ -81,7 +81,21 @@ Add a test to a project whose bucket count does not change: only the shard that 
 
 Task-based affected matches each changed file against each task's inputs. The acceptance matrix records every case locally on `23.3.0-beta.7`. Each row applies one change to the committed smoke fixture, asks `nx affected -t "$SHARD_TARGETS" --files=<changed files> --graph=stdout` which shards it selects, and then runs `nx run-many -t "$SHARD_TARGETS"` to see which shards miss the cache.
 
-The eight demo pull requests, one per case with its own CI run, come with the staging setup.
+Each case also has an open pull request against `main`. The PR's `dte.yml` run is the case: `nx affected` between the PR's base and head, on three agents, on `nx@23.3.0-beta.7`. "Expected" was computed locally before CI. The last column is the project-grained set that legacy affected (`NX_LEGACY_AFFECTED=true`) would select, for comparison.
+
+<!-- prettier-ignore -->
+| PR | Case | Expected on beta.7 | Actual in CI | Result | Legacy project-grained set |
+| --- | --- | --- | --- | --- | --- |
+| [#2](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/2) | Edit one test | `project-001:test-ci--04` | `project-001:test-ci--04` | green | 4 shards |
+| [#3](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/3) | Edit a leaf module | `project-001:test-ci--04` | `project-001:test-ci--04` | green | 4 shards |
+| [#4](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/4) | Edit a barrel | `project-001:test-ci--02` | `project-001:test-ci--02` | green | 4 shards |
+| [#5](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/5) | Edit a cross-project module | 55 shards | the same 55 shards | green | 63 shards |
+| [#6](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/6) | Add one test and delete another (combined) | `project-047:test-ci--04` | `project-047:test-ci--04` | green | 5 shards |
+| [#7](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/7) | Cross a bucket boundary (4 to 8) | `project-001:test-ci--06` | `project-001:test-ci--06` | green | 8 shards |
+| [#8](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/8) | Unrelated change (a project without tests) | none | none; all three agents exited on their own | green | none |
+| [#9](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/9) | One failing test | `project-008:test-ci--01`, failing | `project-008:test-ci--01` failed; main job red | red, as intended | 1 shard |
+
+In every PR run, all tasks ran on the agents and none on the main job. Each agent exited right after its last shard, or as soon as it had nothing to run, and the main job went on to `complete-ci-run` and its summary. Every job finished in under 2.5 minutes, against its 15-minute timeout.
 
 Results on `nx@23.3.0-beta.7`, run locally on the smoke fixture (476 tests in 64 shards) on Sep 30, 2026. "Expected" is the plan's rule followed by the task IDs the rule names for this fixture; the result compares them exactly.
 
@@ -148,7 +162,7 @@ TODO: `.github/workflows/full.yml`, 30 agents times `--parallel=3` on the full f
 3. Add the plugin entry to `nx.json` and remove any `@nx/jest/plugin` entry. Options are in [tools/jest-shards/README.md](tools/jest-shards/README.md).
 4. Add the `testSequencer` line to every `jest.config.*`.
 5. Run `node scripts/parity.ts` until it prints `PARITY OK`.
-6. In CI, on the main job and every agent: set `NX_LEGACY_AFFECTED=false` and `NX_DAEMON=false`, restore `.nx/depcruise` and `.nx/workspace-data` from a cache keyed on the base branch, and compute the target list:
+6. In CI, on the main job and every agent: set `NX_LEGACY_AFFECTED=false`, restore `.nx/depcruise` and `.nx/workspace-data` from a cache keyed on the base branch, and compute the target list:
 
    ```sh
    SHARD_TARGETS=$(node scripts/shard-targets.ts)
@@ -189,12 +203,12 @@ Nx Agents with I/O snapshots can run the same layout faster and learn each task'
 | `jest.preset.js`, `tools/fixture/`                      | The fixture's Jest preset, setup file, work helper and TypeScript transformer                                 |
 | `.github/workflows/`                                    | `verify.yml` (no Cloud), `dte.yml` (3-agent smoke), `full.yml` (30-agent simulation)                          |
 
-Local commands, all with Nx Cloud off:
+Local commands:
 
 ```sh
 pnpm install
 pnpm typecheck && pnpm format:check && pnpm test:unit
-export NX_DAEMON=false NX_NO_CLOUD=true NX_LEGACY_AFFECTED=false
+export NX_LEGACY_AFFECTED=false
 node scripts/parity.ts
 SHARD_TARGETS=$(node scripts/shard-targets.ts)
 pnpm exec nx run-many -t "$SHARD_TARGETS"

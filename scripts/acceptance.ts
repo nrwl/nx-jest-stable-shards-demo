@@ -24,8 +24,7 @@ const runDir = mkdtempSync(join(tmpdir(), 'acceptance-'));
 process.on('exit', () => rmSync(runDir, { recursive: true, force: true }));
 const env = {
   ...process.env,
-  NX_NO_CLOUD: 'true',
-  NX_DAEMON: 'false',
+  NX_DAEMON: 'false', // per-run workspace-data directories would leave orphan daemons
   NX_LEGACY_AFFECTED: 'false',
   NX_CACHE_DIRECTORY: join(runDir, 'cache'),
   NX_WORKSPACE_DATA_DIRECTORY: join(runDir, 'workspace-data'),
