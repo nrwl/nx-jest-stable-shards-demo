@@ -1,0 +1,1 @@
+{ "name": "nx-jest-stable-shards-demo", "private": true, "devDependencies": { "nx": "23.3.0-beta.7" } }
