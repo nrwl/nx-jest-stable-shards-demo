@@ -339,7 +339,8 @@ if (git(['status', '--porcelain']).trim())
 console.error('warming the cache');
 executed();
 const table: string[] = [];
-const verdict = (ok: boolean) => (ok ? 'pass' : '**MISMATCH**');
+let failures = 0;
+const verdict = (ok: boolean) => (ok ? 'pass' : (failures++, '**MISMATCH**'));
 const eq = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 for (const row of rows) {
@@ -357,6 +358,7 @@ for (const row of rows) {
       `| ${row.change} | ${row.expectSelect}: ${describe(wantSelect)} | ${describe(gotSelect)} | ${row.expectCache}: ${describe(wantCache)} | ${describe(gotCache)} | ${verdict(ok)} |`,
     );
   } catch (error) {
+    failures++;
     const message = String(error).split('\n')[0];
     table.push(
       `| ${row.change} | ${row.expectSelect} | error: ${message} | ${row.expectCache} | | **ERROR** |`,
@@ -412,6 +414,9 @@ for (const [stage, max] of [
     const parity = exec('node', ['scripts/parity.ts']);
     ok &&= parity.status === 0;
     results.push(`parity ${parity.status === 0 ? 'OK' : 'FAILED'}`);
+  } catch (error) {
+    ok = false;
+    results.push(`error: ${String(error).split('\n')[0]}`);
   } finally {
     reset();
   }
@@ -465,3 +470,5 @@ console.log(
 );
 console.log('| --- | --- | --- | --- | --- | --- |');
 for (const line of table) console.log(line);
+console.log(`\n${table.length - failures}/${table.length} rows pass`);
+if (failures > 0) process.exitCode = 1;
