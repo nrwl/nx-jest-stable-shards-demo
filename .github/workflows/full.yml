@@ -58,6 +58,11 @@ jobs:
         run: |
           set -o pipefail
           pnpm exec nx run-many -t "$TARGETS" --parallel=3 | tee nx-output.txt
+      # Releases the agents even when the task step failed or never ran; its own
+      # result cannot turn a failed task step green.
+      - name: Complete CI run
+        if: always()
+        run: pnpm exec nx complete-ci-run
       - name: Summary
         if: always()
         run: |
