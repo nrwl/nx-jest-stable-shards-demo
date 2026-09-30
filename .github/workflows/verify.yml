@@ -30,5 +30,9 @@ jobs:
       - run: pnpm format:check
       - run: pnpm test:unit
       - run: pnpm parity
-      - run: echo "SHARD_TARGETS=$(node scripts/shard-targets.ts)" >> "$GITHUB_ENV"
+      - name: Shard target list
+        run: |
+          SHARD_TARGETS=$(node scripts/shard-targets.ts)
+          test -n "$SHARD_TARGETS"
+          echo "SHARD_TARGETS=$SHARD_TARGETS" >> "$GITHUB_ENV"
       - run: pnpm exec nx run-many -t "$SHARD_TARGETS" --parallel 4

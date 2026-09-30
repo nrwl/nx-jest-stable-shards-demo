@@ -49,7 +49,10 @@ jobs:
           node -e "const f='nx.json',j=JSON.parse(require('fs').readFileSync(f));j.plugins.push({plugin:'@nx/jest/plugin',options:{ciTargetName:'test-ci-file'}});require('fs').writeFileSync(f,JSON.stringify(j,null,2))"
           echo "TARGETS=test-ci-file" >> "$GITHUB_ENV"
       - if: inputs.mode == 'sharded'
-        run: echo "TARGETS=$(node scripts/shard-targets.ts)" >> "$GITHUB_ENV"
+        run: |
+          TARGETS=$(node scripts/shard-targets.ts)
+          test -n "$TARGETS"
+          echo "TARGETS=$TARGETS" >> "$GITHUB_ENV"
       - run: pnpm exec nx start-ci-run --distribute-on=manual --stop-agents-after="$TARGETS"
       - name: Run all tests
         run: |

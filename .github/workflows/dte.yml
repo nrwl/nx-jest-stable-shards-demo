@@ -45,7 +45,11 @@ jobs:
           restore-keys: nx-graph-${{ env.GRAPH_CACHE_BRANCH }}-
       - uses: nrwl/nx-set-shas@v4
         if: github.event_name == 'pull_request'
-      - run: echo "SHARD_TARGETS=$(node scripts/shard-targets.ts)" >> "$GITHUB_ENV"
+      - name: Shard target list
+        run: |
+          SHARD_TARGETS=$(node scripts/shard-targets.ts)
+          test -n "$SHARD_TARGETS"
+          echo "SHARD_TARGETS=$SHARD_TARGETS" >> "$GITHUB_ENV"
       - run: pnpm exec nx start-ci-run --distribute-on=manual --stop-agents-after="$SHARD_TARGETS"
       # Exactly one Nx command names the shard targets: the stop condition is
       # met when the first such command finishes.
@@ -86,7 +90,11 @@ jobs:
             .nx/workspace-data
           key: nx-graph-${{ env.GRAPH_CACHE_BRANCH }}-${{ github.sha }}
           restore-keys: nx-graph-${{ env.GRAPH_CACHE_BRANCH }}-
-      - run: echo "SHARD_TARGETS=$(node scripts/shard-targets.ts)" >> "$GITHUB_ENV"
+      - name: Shard target list
+        run: |
+          SHARD_TARGETS=$(node scripts/shard-targets.ts)
+          test -n "$SHARD_TARGETS"
+          echo "SHARD_TARGETS=$SHARD_TARGETS" >> "$GITHUB_ENV"
       - run: pnpm exec nx start-agent
         env:
           NX_AGENT_NAME: agent-${{ matrix.agent }}
