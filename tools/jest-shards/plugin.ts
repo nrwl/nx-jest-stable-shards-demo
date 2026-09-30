@@ -5,7 +5,7 @@ import {
   type TargetConfiguration,
 } from '@nx/devkit';
 import { createNodes as stockJest } from '@nx/jest/plugin';
-import { minimatch } from 'minimatch';
+import { Minimatch } from 'minimatch';
 import { existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { normalizeOptions, planShards, type ShardOptions } from './buckets.ts';
@@ -168,9 +168,11 @@ function capClosure(
       `jest-shards: ${label} still exceeds maxClosureInputs ${max}; using ${patterns.length} project-root globs`,
     );
   }
-  const uncovered = files.find(
-    (f) => !patterns.some((p) => minimatch(f, p.slice(WS.length), { dot: true })),
-  );
+  // Plain paths match themselves; only globs and escaped paths need a matcher.
+  const globs = patterns.map((p) => p.slice(WS.length));
+  const plain = new Set(globs.filter((p) => !/[*?[\]{}!\\]/.test(p)));
+  const matchers = globs.filter((p) => !plain.has(p)).map((p) => new Minimatch(p, { dot: true }));
+  const uncovered = files.find((f) => !plain.has(f) && !matchers.some((m) => m.match(f)));
   if (uncovered) throw new Error(`jest-shards: ${label} inputs do not cover ${uncovered}`);
   return patterns;
 }
