@@ -33,7 +33,7 @@ Which shape is fastest on 30 agents is a measurement, not a claim; see item 7.
 See the shards of one project, their commands and their inputs:
 
 ```sh
-NX_DAEMON=false NX_NO_CLOUD=true pnpm exec nx show project project-001 --json
+pnpm exec nx show project project-001 --json
 ```
 
 Each `test-ci--kk` target runs `jest -c jest.config.js --shard=k/shardCount --runInBand --coverage=false --watch=false` in the project root. The command never names tests; membership lives only in `inputs`:
@@ -56,7 +56,7 @@ The plugin decides membership at graph time; Jest decides it at run time through
 - every `jest.config.*` on disk produced shards.
 
 ```sh
-NX_DAEMON=false NX_NO_CLOUD=true node scripts/parity.ts
+node scripts/parity.ts
 ```
 
 ```text
@@ -162,7 +162,7 @@ TODO: `.github/workflows/full.yml`, 30 agents times `--parallel=3` on the full f
 3. Add the plugin entry to `nx.json` and remove any `@nx/jest/plugin` entry. Options are in [tools/jest-shards/README.md](tools/jest-shards/README.md).
 4. Add the `testSequencer` line to every `jest.config.*`.
 5. Run `node scripts/parity.ts` until it prints `PARITY OK`.
-6. In CI, on the main job and every agent: set `NX_LEGACY_AFFECTED=false` and `NX_DAEMON=false`, restore `.nx/depcruise` and `.nx/workspace-data` from a cache keyed on the base branch, and compute the target list:
+6. In CI, on the main job and every agent: set `NX_LEGACY_AFFECTED=false`, restore `.nx/depcruise` and `.nx/workspace-data` from a cache keyed on the base branch, and compute the target list:
 
    ```sh
    SHARD_TARGETS=$(node scripts/shard-targets.ts)
@@ -203,12 +203,12 @@ Nx Agents with I/O snapshots can run the same layout faster and learn each task'
 | `jest.preset.js`, `tools/fixture/`                      | The fixture's Jest preset, setup file, work helper and TypeScript transformer                                 |
 | `.github/workflows/`                                    | `verify.yml` (no Cloud), `dte.yml` (3-agent smoke), `full.yml` (30-agent simulation)                          |
 
-Local commands, all with Nx Cloud off:
+Local commands:
 
 ```sh
 pnpm install
 pnpm typecheck && pnpm format:check && pnpm test:unit
-export NX_DAEMON=false NX_NO_CLOUD=true NX_LEGACY_AFFECTED=false
+export NX_LEGACY_AFFECTED=false
 node scripts/parity.ts
 SHARD_TARGETS=$(node scripts/shard-targets.ts)
 pnpm exec nx run-many -t "$SHARD_TARGETS"
