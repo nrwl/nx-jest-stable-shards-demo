@@ -23,6 +23,8 @@ export async function importClosures(
     {
       baseDir: workspaceRoot,
       doNotFollow: { path: 'node_modules' },
+      // Only the module graph is needed; this halves a cold run at 21k tests.
+      skipAnalysisNotInRules: true,
       cache: { folder: join(workspaceRoot, '.nx/depcruise'), strategy: 'content' },
       ...(resolve.tsConfig ? { tsConfig: { fileName: resolve.tsConfig } } : {}),
     },
