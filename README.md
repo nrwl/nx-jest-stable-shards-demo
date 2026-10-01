@@ -169,7 +169,9 @@ Use the GitHub Actions `dte` logs to inspect the affected demonstrations. Nx Clo
 
 ## 7. Simulation numbers
 
-TODO: `.github/workflows/full.yml`, 30 agents times `--parallel=3` on the full fixture, per-file tasks against stable shards, cold and warm: task count, wall time, graph creation time, longest task, agent utilization. Durations come from one recorded run (6,403 of 21,093 tests measured, the rest estimated from medians), so the simulation approximates the source suite, not its infrastructure.
+Every recorded test, on 30 agents times `--parallel=3`, once as stock per-file tasks and once as stable shards. [PR #10](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/10) runs both through [`.github/workflows/full.yml`](.github/workflows/full.yml): its `full (per-file)` and `full (sharded)` checks are the cold runs, and "Re-run all jobs" on each check at the same SHA is the warm run. A run counts as cold only if its main log shows zero remote cache hits. The PR description records task count, wall time, graph creation time, longest task and agent utilization for each run.
+
+Durations come from one recorded run (6,403 of 21,093 tests measured, the rest estimated from medians), so the simulation approximates the source suite, not its infrastructure.
 
 ## 8. Adopt it
 

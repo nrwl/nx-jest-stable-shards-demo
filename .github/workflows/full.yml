@@ -11,6 +11,13 @@ on:
         type: choice
         options: [per-file, sharded]
         required: true
+  # Called once per mode by full-per-file.yml and full-sharded.yml on the
+  # demo/full-simulation PR, so each mode shows up as its own check.
+  workflow_call:
+    inputs:
+      mode:
+        type: string
+        required: true
 
 concurrency:
   group: full
