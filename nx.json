@@ -17,6 +17,9 @@
           "{workspaceRoot}/tools/jest-shards/**/*",
           {
             "env": "FIXTURE_WORK_SCALE"
+          },
+          {
+            "env": "FIXTURE_CACHE_KEY"
           }
         ],
         "maxClosureInputs": 1000,
