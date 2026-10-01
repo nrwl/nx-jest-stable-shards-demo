@@ -186,7 +186,7 @@ Durations come from one recorded run (6,403 of 21,093 tests measured, the rest e
 3. Add the plugin entry to `nx.json` and remove any `@nx/jest/plugin` entry. Options are in [tools/jest-shards/README.md](tools/jest-shards/README.md).
 4. Add the `testSequencer` line to every `jest.config.*`.
 5. Run `node scripts/parity.ts` until it prints `PARITY OK`.
-6. In CI, on the main job and every agent: set `NX_LEGACY_AFFECTED=false`, restore `.nx/depcruise` and `.nx/workspace-data` from a cache keyed on the base branch, and compute the target list:
+6. In CI, on the main job and every agent: set `NX_LEGACY_AFFECTED=false` and `NX_CLOUD_CONTINUOUS_ASSIGNMENT=true` (continuous task distribution), restore `.nx/depcruise` and `.nx/workspace-data` from a cache keyed on the base branch, and compute the target list:
 
    ```sh
    SHARD_TARGETS=$(node scripts/shard-targets.ts)
