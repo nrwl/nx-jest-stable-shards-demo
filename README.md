@@ -97,19 +97,19 @@ Add a test to a project whose bucket count does not change: only the shard that 
 
 Task-based affected matches each changed file against each task's inputs. The acceptance matrix records every case locally on `23.3.0-beta.7`. Each row applies one change to the committed smoke fixture, asks `nx affected -t "$SHARD_TARGETS" --files=<changed files> --graph=stdout` which shards it selects, and then runs `nx run-many -t "$SHARD_TARGETS"` to see which shards miss the cache.
 
-Each case also has an open pull request against `main`. The PR's `dte.yml` run is the case: `nx affected` between the PR's base and head, on three agents, on `nx@23.3.0-beta.7`. "Expected" was computed locally before CI. The last column is the project-grained set that legacy affected (`NX_LEGACY_AFFECTED=true`) would select, for comparison.
+Each case also has an open pull request against `main`. The PR's `dte.yml` run is the case: `nx affected` between the PR's base and head, on three agents, on `nx@23.3.0-beta.7`. "Expected" was computed locally before CI. The legacy column is the project-grained set that legacy affected (`NX_LEGACY_AFFECTED=true`) would select, for comparison.
 
 <!-- prettier-ignore -->
-| PR | Case | Expected on beta.7 | Actual in CI | Result | Legacy project-grained set |
-| --- | --- | --- | --- | --- | --- |
-| [#2](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/2) | Edit one test | `project-001:test-ci--04` | `project-001:test-ci--04` | green | 4 shards |
-| [#3](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/3) | Edit a leaf module | `project-001:test-ci--04` | `project-001:test-ci--04` | green | 4 shards |
-| [#4](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/4) | Edit a barrel | `project-001:test-ci--02` | `project-001:test-ci--02` | green | 4 shards |
-| [#5](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/5) | Edit a cross-project module | 55 shards | the same 55 shards | green | 63 shards |
-| [#6](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/6) | Add one test and delete another (combined) | `project-047:test-ci--04` | `project-047:test-ci--04` | green | 5 shards |
-| [#7](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/7) | Cross a bucket boundary (4 to 8) | `project-001:test-ci--06` | `project-001:test-ci--06` | green | 8 shards |
-| [#8](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/8) | Unrelated change (a project without tests) | none | none; all three agents exited on their own | green | none |
-| [#9](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/9) | One failing test | `project-008:test-ci--01`, failing | `project-008:test-ci--01` failed; main job red | red, as intended | 1 shard |
+| PR | Case | Expected on beta.7 | Actual in CI | Result | Legacy project-grained set | GitHub Actions | Nx Cloud timeline |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| [#2](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/2) | Edit one test | `project-001:test-ci--04` | `project-001:test-ci--04` | green | 4 shards | [run](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36784285231) | [timeline](https://staging.nx.app/cipes/6abd8995a07d320545909272/timeline?runGroup=36784285231-1) |
+| [#3](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/3) | Edit a leaf module | `project-001:test-ci--04` | `project-001:test-ci--04` | green | 4 shards | [run](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36784291006) | [timeline](https://staging.nx.app/cipes/6abd89b2a07d3205459092a2/timeline?runGroup=36784291006-1) |
+| [#4](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/4) | Edit a barrel | `project-001:test-ci--02` | `project-001:test-ci--02` | green | 4 shards | [run](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36784302894) | [timeline](https://staging.nx.app/cipes/6abd89a4a07d320545909286/timeline?runGroup=36784302894-1) |
+| [#5](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/5) | Edit a cross-project module | 55 shards | the same 55 shards | green | 63 shards | [run](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36784304066) | [timeline](https://staging.nx.app/cipes/6abd89a0a07d32054590927c/timeline?runGroup=36784304066-1) |
+| [#6](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/6) | Add one test and delete another (combined) | `project-047:test-ci--04` | `project-047:test-ci--04` | green | 5 shards | [run](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36784313443) | [timeline](https://staging.nx.app/cipes/6abd89b4a07d3205459092af/timeline?runGroup=36784313443-1) |
+| [#7](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/7) | Cross a bucket boundary (4 to 8) | `project-001:test-ci--06` | `project-001:test-ci--06` | green | 8 shards | [run](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36784322248) | [timeline](https://staging.nx.app/cipes/6abd89af8ed7801d8447a736/timeline?runGroup=36784322248-1) |
+| [#8](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/8) | Unrelated change (a project without tests) | none | none; all three agents exited on their own | green | none | [run](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36784327343) | [timeline](https://staging.nx.app/cipes/6abd89b0a07d320545909294/timeline?runGroup=36784327343-1) |
+| [#9](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/9) | One failing test | `project-008:test-ci--01`, failing | `project-008:test-ci--01` failed; main job red | red, as intended | 1 shard | [run](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36784337595) | [timeline](https://staging.nx.app/cipes/6abd89b78ed7801d8447a783/timeline?runGroup=36784337595-1) |
 
 In every PR run, all tasks ran on the agents and none on the main job. Each agent exited right after its last shard, or as soon as it had nothing to run, and the main job went on to `complete-ci-run` and its summary. Every job finished in under 2.5 minutes, against its 15-minute timeout.
 
@@ -165,11 +165,16 @@ The 3-agent smoke uses manual distribution in [`.github/workflows/dte.yml`](.git
 
 The eight PRs in item 5 cover selective, empty and failing executions. All tasks ran on agents. With no selected tasks, all three agents exited on their own; with the failing shard, the main job stayed red and still completed the CI run. No job reached its timeout.
 
-Use the GitHub Actions `dte` logs to inspect the affected demonstrations. Nx Cloud's bot comments can link a separate `verify` run, which executes the whole smoke fixture. Links to Nx Cloud staging runs and pipeline executions currently require access to the demo workspace and may show a sign-in or not-found page for other readers; the Actions logs and tables here provide the results without that access.
+The table links each affected demonstration to its GitHub Actions `dte` run and matching Nx Cloud timeline. These demo timelines are publicly accessible. Nx Cloud's bot comments can link a separate `verify` run, which executes the whole smoke fixture; use the table links to inspect the affected case.
 
 ## 7. Full fixture validation
 
 The results and workflow options below come from `demo/full-simulation` ([PR #10](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/10)). The workflow changes remain on that branch; select it when reproducing these runs.
+
+<!-- prettier-ignore -->
+| PR | GitHub Actions | Nx Cloud timeline |
+| --- | --- | --- |
+| [#10](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/10) | [Full uncached run](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36926585672) | [timeline](https://staging.nx.app/cipes/6abecc06682b8e820e47b461/timeline?runGroup=36926585672-1) |
 
 The [October 1 full run](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36926585672) at `997ad13` passed with **1,067 executed shard tasks, zero cached tasks and zero failures**. Agent logs contain 1,067 unique shard executions, no duplicates, and **21,093 passing Jest suites**. The test step took **10m00s**; the complete workflow took **11m26s**. All 30 agents executed shards, and all 31 jobs succeeded and stopped, including CI completion and coordinator daemon cleanup.
 
