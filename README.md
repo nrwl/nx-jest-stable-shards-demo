@@ -169,9 +169,9 @@ Use the GitHub Actions `dte` logs to inspect the affected demonstrations. Nx Clo
 
 ## 7. Simulation numbers
 
-Every recorded test, on 30 agents times `--parallel=3`, once as stock per-file tasks and once as stable shards. [PR #10](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/10) runs both through [`.github/workflows/full.yml`](.github/workflows/full.yml): its `full (per-file)` and `full (sharded)` checks are the cold runs, and "Re-run all jobs" on each check at the same SHA is the warm run. A run counts as cold only if its main log shows zero remote cache hits. The PR description records task count, wall time, graph creation time, longest task and agent utilization for each run.
+The full validation uses every recorded test, on 30 standard agents times `--parallel=2`, with `FIXTURE_WORK_SCALE=0.2`. [`.github/workflows/full.yml`](.github/workflows/full.yml) is manual-only: dispatch `mode=sharded` on the [PR #10](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/10) branch, then rerun all jobs at the same SHA for the warm case. Jobs are capped at 15 minutes, and the test step at 12 minutes to leave time for cleanup. A run counts as cold only if its main log shows zero remote cache hits. Results are pending; the earlier scale-1 runs were canceled. Per-file mode remains available for a separately requested comparison.
 
-Durations come from one recorded run (6,403 of 21,093 tests measured, the rest estimated from medians), so the simulation approximates the source suite, not its infrastructure.
+Durations come from one recorded run (6,403 of 21,093 tests measured, the rest estimated from medians). Scaling shortens the synthetic test bodies but leaves Jest startup and distribution overhead intact. This validates the full task population; it does not predict performance on the source infrastructure.
 
 ## 8. Adopt it
 

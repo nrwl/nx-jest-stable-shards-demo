@@ -1,4 +1,4 @@
-# The full simulation: every recorded test, 30 agents times --parallel=3, either
+# The full simulation: every recorded test at 0.2 scale, 30 agents times --parallel=2, either
 # as stock per-file tasks or as stable shards. One run-many per execution; the
 # warm case is a rerun of the same mode at the same SHA. Label a run cold only
 # if its main log shows zero remote cache hits.
@@ -11,13 +11,6 @@ on:
         type: choice
         options: [per-file, sharded]
         required: true
-  # Called once per mode by full-per-file.yml and full-sharded.yml on the
-  # demo/full-simulation PR, so each mode shows up as its own check.
-  workflow_call:
-    inputs:
-      mode:
-        type: string
-        required: true
 
 concurrency:
   group: full
@@ -25,12 +18,12 @@ concurrency:
 env:
   NX_CLOUD_ACCESS_TOKEN: ${{ secrets.NX_CLOUD_ACCESS_TOKEN }}
   NX_LEGACY_AFFECTED: false
-  FIXTURE_WORK_SCALE: '1'
+  FIXTURE_WORK_SCALE: '0.2'
 
 jobs:
   main:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -61,9 +54,10 @@ jobs:
           echo "TARGETS=$TARGETS" >> "$GITHUB_ENV"
       - run: pnpm exec nx start-ci-run --distribute-on=manual --stop-agents-after="$TARGETS"
       - name: Run all tests
+        timeout-minutes: 12
         run: |
           set -o pipefail
-          pnpm exec nx run-many -t "$TARGETS" --parallel=3 | tee nx-output.txt
+          pnpm exec nx run-many -t "$TARGETS" --parallel=2 | tee nx-output.txt
       # Releases the agents even when the task step failed or never ran; its own
       # result cannot turn a failed task step green.
       - name: Complete CI run
@@ -77,7 +71,7 @@ jobs:
 
   agents:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 15
     strategy:
       matrix:
         agent:
