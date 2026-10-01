@@ -1,2 +1,2 @@
 const shared = require('./shared');
-module.exports = { value: 'test-00060', shared };
+module.exports = { value: 'test-00060', shared, edited: true };
