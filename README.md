@@ -10,6 +10,22 @@ The workspace is a synthetic fixture: 77 projects, the dependency edges and the 
 
 Everything runs on `nx@23.3.0-beta.7` with `NX_LEGACY_AFFECTED=false`, which turns on task-based affected selection.
 
+## Run the smoke fixture locally
+
+Use Node 24.21.0 (see `.node-version`) and pnpm 12.8.1. The committed fixture has 476 tests in 64 shards; the default work scale is zero, so local checks do not spend time simulating recorded durations.
+
+```sh
+pnpm install --frozen-lockfile
+pnpm typecheck && pnpm format:check && pnpm test:unit
+export NX_LEGACY_AFFECTED=false
+node scripts/parity.ts
+SHARD_TARGETS=$(node scripts/shard-targets.ts)
+test -n "$SHARD_TARGETS"
+pnpm exec nx run-many -t "$SHARD_TARGETS" --parallel=3
+```
+
+Expect `PARITY OK` and 64 successful tasks. `nx.json` points to the demo's Nx Cloud staging workspace; local checks need no CI token. To generate all 21,093 tests, run `node scripts/generate-fixture.ts --preset full`; this replaces `packages/`, so do it in a disposable checkout. Generate `--preset smoke` there to restore the smoke fixture.
+
 ## 1. The problem
 
 With 21,093 test files there are three stock shapes:
@@ -143,9 +159,13 @@ Rerun the matrix with a clean working tree; it reverts every change it makes:
 node scripts/acceptance.ts
 ```
 
-## 6. Staging runs
+## 6. CI runs
 
-TODO: the 3-agent smoke on Nx Cloud manual DTE (`.github/workflows/dte.yml`): task counts, agent placement, agents released after the last shard, the empty-selection and failing-shard cases.
+The 3-agent smoke uses manual distribution in [`.github/workflows/dte.yml`](.github/workflows/dte.yml). Its [cold main run](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36767862871/attempts/1) executed all 64 shards on the agents, with zero cache hits, in 178.1 s for the `run-many` step (204 s for the main job). The [warm rerun at the same SHA](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36767862871/attempts/2) had 64 cache hits and took 16.7 s for `run-many` (41 s for the main job).
+
+The eight PRs in item 5 cover selective, empty and failing executions. All tasks ran on agents. With no selected tasks, all three agents exited on their own; with the failing shard, the main job stayed red and still completed the CI run. No job reached its timeout.
+
+Use the GitHub Actions `dte` logs to inspect the affected demonstrations. Nx Cloud's bot comments can link a separate `verify` run, which executes the whole smoke fixture. Links to Nx Cloud staging runs and pipeline executions currently require access to the demo workspace and may show a sign-in or not-found page for other readers; the Actions logs and tables here provide the results without that access.
 
 ## 7. Simulation numbers
 
@@ -195,7 +215,7 @@ Nx Agents with I/O snapshots can run the same layout faster and learn each task'
 
 | Path                                                    | What                                                                                                          |
 | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `tools/jest-shards/`                                    | The plugin (customer-maintained)                                                                              |
+| `tools/jest-shards/`                                    | The plugin you maintain                                                                                       |
 | `scripts/shard-targets.ts`                              | Prints the shard target list                                                                                  |
 | `scripts/parity.ts`                                     | Membership parity check                                                                                       |
 | `scripts/acceptance.ts`                                 | The acceptance matrix on the smoke fixture                                                                    |
