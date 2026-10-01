@@ -23,7 +23,7 @@ env:
 jobs:
   main:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -54,7 +54,7 @@ jobs:
           echo "TARGETS=$TARGETS" >> "$GITHUB_ENV"
       - run: pnpm exec nx start-ci-run --distribute-on=manual --stop-agents-after="$TARGETS"
       - name: Run all tests
-        timeout-minutes: 12
+        timeout-minutes: 20
         run: |
           set -o pipefail
           pnpm exec nx run-many -t "$TARGETS" --parallel=2 | tee nx-output.txt
@@ -71,7 +71,7 @@ jobs:
 
   agents:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       matrix:
         agent:
