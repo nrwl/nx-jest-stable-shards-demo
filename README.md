@@ -167,13 +167,21 @@ The eight PRs in item 5 cover selective, empty and failing executions. All tasks
 
 Use the GitHub Actions `dte` logs to inspect the affected demonstrations. Nx Cloud's bot comments can link a separate `verify` run, which executes the whole smoke fixture. Links to Nx Cloud staging runs and pipeline executions currently require access to the demo workspace and may show a sign-in or not-found page for other readers; the Actions logs and tables here provide the results without that access.
 
-## 7. Simulation numbers
+## 7. Full fixture validation
 
-The full validation uses every recorded test, on 30 standard agents times `--parallel=2`, with `FIXTURE_WORK_SCALE=0.2`. [`.github/workflows/full.yml`](.github/workflows/full.yml) is manual-only: dispatch `mode=sharded` on the [PR #10](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/10) branch with a new `cache_key` for a cold run. That key is a declared input to every shard, identical on the coordinator and agents. Reuse the key, scale and SHA for the warm case. Jobs are capped at 25 minutes, and the test step at 20 minutes to leave time for setup and cleanup. A run counts as cold only if its main log shows zero cached tasks. The first scale-0.2 attempt reached the previous 12-minute step cap; all 1,067 agent Jest summaries passed, but the coordinator could not finish. The recovery run passed with all 1,067 tasks cached. Per-file mode remains available for a separately requested comparison; `cache_key` applies to sharded mode.
+The [October 1 full run](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36926585672) at `997ad13` passed with **1,067 executed shard tasks, zero cached tasks and zero failures**. Agent logs contain 1,067 unique shard executions, no duplicates, and **21,093 passing Jest suites**. The test step took **10m00s**; the complete workflow took **11m26s**. All 30 agents executed shards, and all 31 jobs succeeded and stopped, including CI completion and coordinator daemon cleanup.
+
+The full validation uses a synthetic fixture matching the full recorded test population, on 30 standard `ubuntu-latest` agents with `--parallel=2` and `FIXTURE_WORK_SCALE=0.2`. The full and smoke distribution workflows set `NX_CLOUD_CONTINUOUS_ASSIGNMENT=true` on the coordinator and agents to enable continuous task distribution.
+
+The measured run used `daemon=true` and the fresh cache key `continuous-cold-20261001T210739655Z-24f670d1`. All 30 agent logs show the V4 execution path. Total job time was 345 runner-minutes (372 after rounding each job up separately); these are duration totals, not an invoice.
+
+[`.github/workflows/full.yml`](.github/workflows/full.yml) is manual-only: dispatch `mode=sharded` on `demo/full-simulation` ([PR #10](https://github.com/nrwl/nx-jest-stable-shards-demo/pull/10)) with `daemon=true` and a new `cache_key` for a cold run. That key is a declared input to every shard, identical on the coordinator and agents. Reuse the key, scale and SHA for a warm comparison. Jobs are capped at 25 minutes, and the test step at 20 minutes to leave time for setup and cleanup. A run counts as cold only if its main log shows zero cached tasks. Per-file mode remains available for a separately requested comparison; `cache_key` applies to sharded mode.
 
 Dispatch `mode=daemon-probe` to compare graph creation with and without the daemon on one standard runner, without Jest or Nx Cloud. The probe checks task parity and actual daemon use and reports cold, repeated and fresh-daemon/warm-disk timings. Its job is capped at 10 minutes. Full runs accept `daemon=true` to enable the daemon on the coordinator only; it is stopped during cleanup. Agents retain the CI default.
 
-Durations come from one recorded run (6,403 of 21,093 tests measured, the rest estimated from medians). Scaling shortens the synthetic test bodies but leaves Jest startup and distribution overhead intact. This validates the full task population; it does not predict performance on the source infrastructure.
+The [single-runner Linux probe](https://github.com/nrwl/nx-jest-stable-shards-demo/actions/runs/36919508636) averaged 53.4 seconds for target discovery plus graph/hash planning with a fresh daemon and warm disk caches, versus 58.9 seconds with the daemon off (two samples each). Task parity and daemon cleanup passed. This modest startup saving supports the optional coordinator daemon; it does not establish a full-pipeline speedup.
+
+Synthetic test-body durations come from one recorded run (6,403 of 21,093 tests measured, the rest estimated from medians). Scaling shortens the synthetic test bodies but leaves Jest startup and distribution overhead intact. This validates the full task population; it does not predict performance on the source infrastructure.
 
 ## 8. Adopt it
 
@@ -186,16 +194,16 @@ Durations come from one recorded run (6,403 of 21,093 tests measured, the rest e
 3. Add the plugin entry to `nx.json` and remove any `@nx/jest/plugin` entry. Options are in [tools/jest-shards/README.md](tools/jest-shards/README.md).
 4. Add the `testSequencer` line to every `jest.config.*`.
 5. Run `node scripts/parity.ts` until it prints `PARITY OK`.
-6. In CI, on the main job and every agent: set `NX_LEGACY_AFFECTED=false` and `NX_CLOUD_CONTINUOUS_ASSIGNMENT=true` (continuous task distribution), restore `.nx/depcruise` and `.nx/workspace-data` from a cache keyed on the base branch, and compute the target list:
+6. In CI, set `NX_LEGACY_AFFECTED=false` and `NX_CLOUD_CONTINUOUS_ASSIGNMENT=true` (continuous task distribution) on the coordinator and every agent. Restore `.nx/depcruise` and `.nx/workspace-data` from a cache keyed on the base branch on each machine. On the coordinator, compute the target list and start the run:
 
    ```sh
    SHARD_TARGETS=$(node scripts/shard-targets.ts)
    test -n "$SHARD_TARGETS"
    npx nx start-ci-run --distribute-on=manual --stop-agents-after="$SHARD_TARGETS"
-   npx nx affected -t "$SHARD_TARGETS" --parallel=3
+   npx nx affected -t "$SHARD_TARGETS" --parallel=2
    ```
 
-   Agents run `npx nx start-agent`. Run exactly one Nx command against the shard targets per CI run: the stop condition is met when the first such command ends.
+   Agents run `npx nx start-agent`. Run exactly one Nx command against the shard targets per CI run: the stop condition is met when the first such command ends. Add an always-run coordinator cleanup step calling `npx nx complete-ci-run`, including when setup or tests fail.
 
 It works with any CI that supplies Git refs; `.github/workflows/dte.yml` is the GitHub Actions version.
 
