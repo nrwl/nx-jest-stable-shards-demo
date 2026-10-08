@@ -172,7 +172,7 @@ describe('plugin', () => {
     assert.ok(!a.includes(WS + 'packages/app/src/leaf-odd.js'), "no other member's closure");
 
     const b = shardWith(byProject, 'packages/app', 'packages/app/src/b.test.js');
-    assert.ok(b.includes(WS + 'packages/lib/src/util.js'), 'alias resolved like moduleNameMapper');
+    assert.ok(b.includes(WS + 'packages/lib/src/util.js'), 'resolved by moduleNameMapper');
 
     const c = shardWith(byProject, 'packages/app', 'packages/app/child/c.test.js');
     assert.ok(
@@ -217,9 +217,99 @@ describe('plugin', () => {
     assert.ok(c.includes(WS + 'packages/app/child/**/*'), 'a child-root file keeps its own root');
   });
 
-  test('an unresolved static workspace import fails the graph, naming file and specifier', async () => {
-    const root = workspace({ 'packages/app/src/a.test.js': "require('./missing');\n" });
-    await assert.rejects(targets(root), /packages\/app\/src\/a\.test\.js: '\.\/missing'/);
+  test('an import Jest cannot resolve fails the graph, naming config, importer and specifier', async () => {
+    const relative = workspace({ 'packages/app/src/a.test.js': "require('./missing');\n" });
+    await assert.rejects(
+      targets(relative),
+      /packages\/app\/jest\.config\.js: packages\/app\/src\/a\.test\.js: '\.\/missing'/,
+    );
+    // Not under any alias or known scope: nothing unresolved is dropped. Both
+    // configs resolve alike and share the work, so either may be named.
+    const bare = workspace({ 'packages/lib/src/util.js': "require('not-installed');\n" });
+    await assert.rejects(
+      targets(bare),
+      /packages\/(app|lib)\/jest\.config\.js: packages\/lib\/src\/util\.js: 'not-installed'/,
+    );
+  });
+
+  test('one shared file resolves per project, and a mapped file brings its own imports', async () => {
+    const mapper = (target: string) =>
+      `module.exports = { preset: '../../jest.preset.js', moduleNameMapper: { '^@acme/thing$': '<rootDir>/${target}' } };\n`;
+    const byProject = await targets(
+      workspace({
+        'shared/uses-thing.js': "require('@acme/thing');\n",
+        'packages/app/jest.config.js': mapper('src/thing.js'),
+        'packages/app/src/a.test.js': "require('../../../shared/uses-thing');\n",
+        'packages/app/src/thing.js': "require('./thing-dep');\n",
+        'packages/app/src/thing-dep.js': '',
+        'packages/lib/jest.config.js': mapper('src/other-thing.js'),
+        'packages/lib/src/util.test.js': "require('../../../shared/uses-thing');\n",
+        'packages/lib/src/other-thing.js': '',
+      }),
+    );
+    const app = shardWith(byProject, 'packages/app', 'packages/app/src/a.test.js');
+    const lib = shardWith(byProject, 'packages/lib', 'packages/lib/src/util.test.js');
+    for (const inputs of [app, lib]) assert.ok(inputs.includes(WS + 'shared/uses-thing.js'));
+    assert.ok(app.includes(WS + 'packages/app/src/thing.js'));
+    assert.ok(app.includes(WS + 'packages/app/src/thing-dep.js'), "the mapped file's own import");
+    assert.ok(!app.includes(WS + 'packages/lib/src/other-thing.js'));
+    assert.ok(lib.includes(WS + 'packages/lib/src/other-thing.js'));
+    assert.ok(!lib.includes(WS + 'packages/app/src/thing.js'));
+  });
+
+  test('what a config loads is an input of its own project only', async () => {
+    const byProject = await targets(
+      workspace({
+        'packages/lib/jest.config.js':
+          "module.exports = { ...require('./jest.base'), transform: { '\\\\.js$': '<rootDir>/transform.js' } };\n",
+        'packages/lib/jest.base.js': "module.exports = { preset: '../../jest.preset.js' };\n",
+        'packages/lib/transform.js':
+          "require('./transform-helper');\nmodule.exports = { process: (code) => ({ code }) };\n",
+        'packages/lib/transform-helper.js': '',
+      }),
+    );
+    const lib = shardWith(byProject, 'packages/lib', 'packages/lib/src/util.test.js');
+    const app = shardWith(byProject, 'packages/app', 'packages/app/src/a.test.js');
+    for (const file of ['jest.base.js', 'transform.js', 'transform-helper.js']) {
+      assert.ok(lib.includes(WS + 'packages/lib/' + file), file);
+      assert.ok(!app.includes(WS + 'packages/lib/' + file), `${file} is not an input of app`);
+    }
+    for (const inputs of [lib, app]) assert.ok(inputs.includes(WS + 'jest.preset.js'), 'preset');
+  });
+
+  test('a declared shared file that is missing fails the graph', async () => {
+    await assert.rejects(
+      targets(workspace(), { sharedInputs: ['{workspaceRoot}/tools/gone.js'] }),
+      /sharedInputs: tools\/gone\.js cannot be read/,
+    );
+  });
+
+  test('an environment with unknown export conditions fails unless the config declares them', async () => {
+    const config = (extra: string) =>
+      `module.exports = { preset: '../../jest.preset.js', testEnvironment: '<rootDir>/env.js'${extra} };\n`;
+    const env = 'module.exports = class {};\n';
+    await assert.rejects(
+      targets(workspace({ 'packages/lib/jest.config.js': config(''), 'packages/lib/env.js': env })),
+      /packages\/lib\/jest\.config\.js: cannot tell which package export conditions/,
+    );
+    const byProject = await targets(
+      workspace({
+        'packages/lib/jest.config.js': config(
+          ", testEnvironmentOptions: { customExportConditions: ['node'] }",
+        ),
+        'packages/lib/env.js': env,
+      }),
+    );
+    const lib = shardWith(byProject, 'packages/lib', 'packages/lib/src/util.test.js');
+    assert.ok(lib.includes(WS + 'packages/lib/env.js'), 'the environment is a project input');
+  });
+
+  test('a rootDir outside the project fails the graph', async () => {
+    const root = workspace({
+      'packages/lib/jest.config.js':
+        "module.exports = { rootDir: '../app', preset: '../../jest.preset.js' };\n",
+    });
+    await assert.rejects(targets(root), /packages\/lib\/jest\.config\.js sets rootDir/);
   });
 
   test('a test importing a test fails', async () => {
@@ -251,5 +341,23 @@ describe('sequencer', () => {
     assert.equal(plan.shardCount, 2);
     assert.deepEqual(union.sort(), tests.map((t) => t.path).sort());
     assert.throws(() => shard(1, 4), /2 shards, but Jest was given --shard=1\/4/);
+  });
+
+  test('plans by the project root when rootDir is below it', () => {
+    const root = workspace();
+    const projectRoot = join(root, 'packages/lib');
+    const tests = names(30).map((path) => ({
+      path: join(projectRoot, path),
+      context: { config: { rootDir: join(projectRoot, 'src') } },
+    }));
+    const plan = planShards('packages/lib', names(30), normalizeOptions());
+    const kept = new StableShardSequencer()
+      .shard(tests as never, { shardIndex: 1, shardCount: plan.shardCount })
+      .map((t) => t.path);
+    const expected = names(30).filter((path) => plan.shardOf.get(path) === 1);
+    assert.deepEqual(
+      kept,
+      expected.map((path) => join(projectRoot, path)),
+    );
   });
 });

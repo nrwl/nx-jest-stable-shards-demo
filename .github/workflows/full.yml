@@ -38,7 +38,6 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            .nx/depcruise
             .nx/workspace-data
           key: nx-graph-full-${{ inputs.mode }}-${{ github.sha }}
           restore-keys: nx-graph-full-${{ inputs.mode }}-
@@ -120,7 +119,6 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: |
-            .nx/depcruise
             .nx/workspace-data
           key: nx-graph-full-${{ inputs.mode }}-${{ github.sha }}
           restore-keys: nx-graph-full-${{ inputs.mode }}-

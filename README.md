@@ -19,12 +19,13 @@ pnpm install --frozen-lockfile
 pnpm typecheck && pnpm format:check && pnpm test:unit
 export NX_LEGACY_AFFECTED=false
 node scripts/parity.ts
+node scripts/mapper-fixture.ts
 SHARD_TARGETS=$(node scripts/shard-targets.ts)
 test -n "$SHARD_TARGETS"
 pnpm exec nx run-many -t "$SHARD_TARGETS" --parallel=3
 ```
 
-Expect `PARITY OK` and 64 successful tasks. `nx.json` points to the demo's Nx Cloud staging workspace; local checks need no CI token. To generate all 21,093 tests, run `node scripts/generate-fixture.ts --preset full`; this replaces `packages/`, so do it in a disposable checkout. Generate `--preset smoke` there to restore the smoke fixture.
+Expect `PARITY OK`, `45/45 rows pass` from the mapper fixture and 64 successful tasks. `nx.json` points to the demo's Nx Cloud staging workspace; local checks need no CI token. To generate all 21,093 tests, run `node scripts/generate-fixture.ts --preset full`; this replaces `packages/`, so do it in a disposable checkout. Generate `--preset smoke` there to restore the smoke fixture.
 
 ## 1. The problem
 
@@ -44,7 +45,7 @@ Which shape is fastest on 30 agents is a measurement, not a claim; see item 7.
 
 - A conventional `jest.config.*` whose `testMatch` is relative to the project root (`**/*.test.js`) or comes from the preset.
 - One line in that config: `testSequencer: require.resolve('<relative path>/tools/jest-shards/sequencer.ts')`.
-- Nothing else per project. What Jest reads outside imports (setup files, transformers, `__mocks__`, snapshots from a custom resolver) is declared once in the plugin's `sharedInputs`, and aliases once in its `resolve` option.
+- Nothing else per project. Imports resolve through each project's own Jest configuration (`moduleNameMapper`, `<rootDir>`, module directories), and the config's setup files, transformers and preset become inputs on their own. What Jest reads outside imports and outside its config (`__mocks__`, snapshots from a custom resolver, runtime file reads) is declared once in the plugin's `sharedInputs`.
 
 See the shards of one project, their commands and their inputs:
 
@@ -57,10 +58,23 @@ Each `test-ci--kk` target runs `jest -c jest.config.js --shard=k/shardCount --ru
 1. the member tests;
 2. each member's `__snapshots__/<file>.snap`;
 3. the project's `jest.config.js` and `package.json`;
-4. the shared inputs from `nx.json`, plus whatever the setup file and preset import;
-5. every file the member tests import, transitively, as computed by dependency-cruiser.
+4. the shared inputs from `nx.json`, plus what the project's Jest config loads for every test (preset, setup files, transformers) and whatever those import;
+5. every file the member tests import, transitively: dependency-cruiser reads each file's specifiers and the project's own Jest resolver resolves them.
 
 `nx graph` shows the same 77 projects and 455 edges as the source monorepo. The shards add no projects.
+
+### Imports resolve the way each project's Jest config resolves them
+
+The plugin has no alias option. It loads every `jest.config.*` with Jest's own loader and resolves each import with that project's Jest resolver, so `moduleNameMapper`, `<rootDir>`, module directories and package export conditions apply exactly as they do when the test runs. One shared file imported by two projects can therefore have two closures. An import Jest cannot resolve fails the graph with the config, the importer and the specifier.
+
+`fixtures/mappers` is a small workspace of its own with three projects and seventeen resolution cases: one specifier mapped differently by three configs, overlapping patterns in both orders, capture groups, a replacement array, replacements that name a linked workspace package and a third-party package, a mapped mock with a nested import, a `rootDir` below the project root, `modulePaths`, export conditions, and a package whose `main` is an absent, gitignored build output. `fixtures/mappers/cases.json` records the file each case must resolve to. `pnpm mappers` copies the fixture to a throwaway workspace and checks, with real Nx and Jest:
+
+- the plugin puts the recorded file (and what it imports) in the inputs of the importing test's shard;
+- Jest resolves the same file: every fixture test compares `require.resolve` with the record;
+- editing each resolved file makes exactly the dependent shards miss the cache;
+- changing only a mapper in a Jest config changes the closure;
+- cold and warm graph builds produce the same targets;
+- seven broken variants (an unmapped package with a missing `main`, the same with a gitignored build present, an unresolvable specifier, a mapper to missing files, a missing relative file, a missing shared file, a `rootDir` outside the project) fail graph construction and name the cause.
 
 ## 3. Membership equals Jest
 
@@ -197,11 +211,12 @@ Synthetic test-body durations come from one recorded run (6,403 of 21,093 tests 
    - `nx`, `@nx/devkit` and `@nx/jest` at one version that has task-based affected (`23.3.0-beta.7` here);
    - `jest` and `@jest/test-sequencer` at the same version (`29.7.0` here);
    - `dependency-cruiser` (`^18.4.0`) and `minimatch` (`^10`);
-   - `typescript`, if tests are TypeScript or `resolve.tsConfig` is set.
+   - `typescript`, if tests are TypeScript;
+   - `jest-config`, `jest-runtime`, `jest-resolve` and `jest-haste-map` at your Jest 29 version, so the plugin loads configs and resolves imports with Jest's own code.
 3. Add the plugin entry to `nx.json` and remove any `@nx/jest/plugin` entry. Options are in [tools/jest-shards/README.md](tools/jest-shards/README.md).
 4. Add the `testSequencer` line to every `jest.config.*`.
 5. Run `node scripts/parity.ts` until it prints `PARITY OK`.
-6. In CI, set `NX_LEGACY_AFFECTED=false` and `NX_CLOUD_CONTINUOUS_ASSIGNMENT=true` (continuous task distribution) on the coordinator and every agent. Restore `.nx/depcruise` and `.nx/workspace-data` from a cache keyed on the base branch on each machine. On the coordinator, compute the target list and start the run:
+6. In CI, set `NX_LEGACY_AFFECTED=false` and `NX_CLOUD_CONTINUOUS_ASSIGNMENT=true` (continuous task distribution) on the coordinator and every agent. Restore `.nx/workspace-data` from a cache keyed on the base branch on each machine. On the coordinator, compute the target list and start the run:
 
    ```sh
    SHARD_TARGETS=$(node scripts/shard-targets.ts)
@@ -216,15 +231,15 @@ It works with any CI that supplies Git refs; `.github/workflows/dte.yml` is the 
 
 What you maintain afterwards:
 
-| Item                                                                                 | Notes                                                                                                                                                                                |
-| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tools/jest-shards/`                                                                 | Plugin, bucket policy, sequencer, closures and their tests                                                                                                                           |
-| One `testSequencer` line per Jest config                                             | The sequencer fails the run if the graph is stale                                                                                                                                    |
-| The `nx.json` plugin entry                                                           | Changing a count or isolating a test rebalances that project once                                                                                                                    |
-| `scripts/shard-targets.ts`, `scripts/parity.ts` and the CI step that calls the first | Replaces any hand-maintained target list                                                                                                                                             |
-| CI env and cache restore on every machine                                            | Must be identical on the main job and agents                                                                                                                                         |
-| The Nx version                                                                       | Rerun parity and the acceptance matrix on every move                                                                                                                                 |
-| Rules                                                                                | Tests do not import tests; `sharedInputs` lists what Jest reads outside imports; computed requires and runtime file reads need declared inputs; `resolve` mirrors `moduleNameMapper` |
+| Item                                                                                 | Notes                                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tools/jest-shards/`                                                                 | Plugin, bucket policy, sequencer, closures and their tests                                                                                                                                    |
+| One `testSequencer` line per Jest config                                             | The sequencer fails the run if the graph is stale                                                                                                                                             |
+| The `nx.json` plugin entry                                                           | Changing a count or isolating a test rebalances that project once                                                                                                                             |
+| `scripts/shard-targets.ts`, `scripts/parity.ts` and the CI step that calls the first | Replaces any hand-maintained target list                                                                                                                                                      |
+| CI env and cache restore on every machine                                            | Must be identical on the main job and agents                                                                                                                                                  |
+| The Nx version                                                                       | Rerun parity and the acceptance matrix on every move                                                                                                                                          |
+| Rules                                                                                | Tests do not import tests; `sharedInputs` lists what Jest reads outside imports; computed requires and runtime file reads need declared inputs; an import Jest cannot resolve fails the graph |
 
 ## 9. Later: Nx Agents
 
@@ -249,6 +264,7 @@ pnpm install
 pnpm typecheck && pnpm format:check && pnpm test:unit
 export NX_LEGACY_AFFECTED=false
 node scripts/parity.ts
+node scripts/mapper-fixture.ts
 SHARD_TARGETS=$(node scripts/shard-targets.ts)
 pnpm exec nx run-many -t "$SHARD_TARGETS"
 ```
