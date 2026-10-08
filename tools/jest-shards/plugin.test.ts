@@ -1,6 +1,16 @@
 import type { CreateNodesContext, TargetConfiguration } from '@nx/devkit';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, describe, test } from 'node:test';
@@ -222,6 +232,78 @@ describe('plugin', () => {
     await assert.rejects(targets(root), /packages\/app\/src\/a\.test\.js: '\.\/missing'/);
   });
 
+  test('all unresolved imports across roots are reported together with the resolver hint', async () => {
+    const root = workspace({
+      'packages/app/src/a.test.js': "require('./missing-a');\nrequire('@acme/typo');\n",
+      'packages/lib/src/util.test.js': "require('./missing-b');\n",
+      'packages/no-tests/package.json': '{ "name": "@acme/local" }',
+    });
+    await assert.rejects(targets(root), (error: Error) => {
+      for (const message of [
+        "a.test.js: './missing-a' (relative)",
+        "a.test.js: '@acme/typo' (workspace-scope)",
+        "util.test.js: './missing-b' (relative)",
+        'project/config packages/app (packages/app/jest.config.js)',
+        'project/config packages/lib (packages/lib/jest.config.js)',
+        "Match the plugin's resolve options to Jest's moduleNameMapper, or fix the import",
+      ])
+        assert.ok(error.message.includes(message), message);
+      return true;
+    });
+  });
+
+  test('ignored build outputs, coverage and checkout copies do not enter workspace inventory', async () => {
+    const root = workspace({
+      '.gitignore': 'node_modules\n.nx\ndist/\ncoverage/\n.sandbox/worktrees/\n',
+      'dist/package.json': '{ "name": "app" }',
+      'coverage/package.json': '{ "name": "app" }',
+      '.sandbox/worktrees/copy/packages/app/package.json': '{ "name": "app" }',
+      'node_modules/external/package.json': '{',
+      '.nx/cache/package.json': '{',
+    });
+    assert.deepEqual([...workspaceOwnership(root).packages], [['app', 'packages/app']]);
+    await targets(root);
+  });
+
+  test('nested Git repositories and worktrees are excluded by their Git marker', async () => {
+    const root = workspace({
+      '.sandbox/worktrees/copy/.git': 'gitdir: /unused/path\n',
+      '.sandbox/worktrees/copy/packages/app/package.json': '{ "name": "app" }',
+      'checkouts/copy/.git/config': '',
+      'checkouts/copy/package.json': '{',
+    });
+    assert.deepEqual([...workspaceOwnership(root).packages], [['app', 'packages/app']]);
+    await targets(root);
+  });
+
+  test('nested ignore rules exclude invalid fixtures and honor manifest negations', async () => {
+    const root = workspace({
+      'packages/no-tests/.gitignore': 'fixtures/\n*.json\n!package.json\n',
+      'packages/no-tests/package.json': '{ "name": "@acme/local" }',
+      'packages/no-tests/fixtures/package.json': '{',
+      '.nxignore': 'tools/fixtures/\n',
+      'tools/fixtures/package.json': '{',
+    });
+    assert.equal(workspaceOwnership(root).packages.get('@acme/local'), 'packages/no-tests');
+    await targets(root);
+  });
+
+  test('duplicate source package names report both manifest paths', () => {
+    const root = workspace({ 'packages/copy/package.json': '{ "name": "app" }' });
+    assert.throws(
+      () => workspaceOwnership(root),
+      (error: Error) => {
+        for (const message of [
+          "duplicate workspace package 'app'",
+          'packages/app/package.json',
+          'packages/copy/package.json',
+        ])
+          assert.ok(error.message.includes(message), message);
+        return true;
+      },
+    );
+  });
+
   test('an unresolved package under an existing workspace scope fails without an alias', async () => {
     const root = workspace({
       'packages/app/src/a.test.js': "require('@acme/undeclared');\n",
@@ -312,6 +394,50 @@ describe('plugin', () => {
     await targets(root);
     rmSync(join(root, 'packages/app/src/leaf-a2.js'));
     await assert.rejects(targets(root), /leaf-a.js: '\.\/leaf-a2' \(relative\)/);
+  });
+
+  test('Git metadata caching detects warm source deletion and manifest inventory changes', async () => {
+    const root = workspace({ '.gitignore': '.nx\nnode_modules\n' });
+    const git = (args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+    git(['init', '-q']);
+    git(['add', '.']);
+    git([
+      '-c',
+      'user.name=workspace-fixture',
+      '-c',
+      'user.email=fixture@example.invalid',
+      'commit',
+      '-qm',
+      'Fixture baseline',
+    ]);
+    await targets(root);
+    const policies = readdirSync(join(root, '.nx/depcruise'));
+    assert.equal(policies.length, 1);
+    const cache = JSON.parse(
+      readFileSync(join(root, '.nx/depcruise', policies[0], 'cache.json'), 'utf8'),
+    );
+    assert.equal(cache.revisionData.SHA1, git(['rev-parse', 'HEAD']).trim());
+    rmSync(join(root, 'packages/app/src/leaf-a2.js'));
+    await assert.rejects(targets(root), /leaf-a.js: '\.\/leaf-a2' \(relative\)/);
+    writeFileSync(join(root, 'packages/app/src/leaf-a2.js'), '');
+    writeFileSync(join(root, 'packages/app/src/a.test.js'), "require('@acme/unknown');\n");
+    await targets(root);
+    mkdirSync(join(root, 'packages/no-tests'), { recursive: true });
+    writeFileSync(join(root, 'packages/no-tests/package.json'), '{ "name": "@acme/local" }');
+    await assert.rejects(targets(root), /@acme\/unknown.*workspace-scope/);
+  });
+
+  test('ignore-file edits update ownership after warm inference', async () => {
+    const root = workspace({
+      '.gitignore': 'packages/no-tests/\n',
+      'packages/no-tests/package.json': '{ "name": "@acme/local" }',
+      'packages/app/src/a.test.js': "require('@acme/unknown');\n",
+    });
+    await targets(root);
+    writeFileSync(join(root, '.gitignore'), '');
+    await assert.rejects(targets(root), /@acme\/unknown.*workspace-scope/);
+    writeFileSync(join(root, '.gitignore'), 'packages/no-tests/\n');
+    await targets(root);
   });
 
   test('manifest additions and deletions invalidate warm workspace ownership', async () => {
