@@ -1,0 +1,1 @@
+module.exports = { built: 'double' };

@@ -77,7 +77,9 @@ const files: Record<string, string> = {
   'nx.json': JSON.stringify({
     plugins: [{ plugin: './tools/jest-shards/plugin.ts', options: {} }],
   }),
-  'jest.preset.js': "module.exports = { testMatch: ['**/*.test.js'] };\n",
+  'jest.preset.js':
+    "module.exports = { testMatch: ['**/*.test.js'], setupFiles: [__dirname + '/tools/setup.js'], " +
+    "moduleNameMapper: { '^@lib/(.*)$': __dirname + '/packages/lib/src/$1' } };\n",
   'tools/setup.js': "require('./helper');\n",
   'tools/helper.js': 'module.exports = 1;\n',
   'packages/app/project.json': '{ "name": "app" }',
@@ -114,8 +116,7 @@ function workspace(overrides: Record<string, string | null> = {}): string {
 
 const baseOptions: Partial<ShardOptions> = {
   testsPerShard: 1,
-  sharedInputs: ['{workspaceRoot}/tools/setup.js', { env: 'WORK' }],
-  resolve: { alias: { '@lib': 'packages/lib/src' } },
+  sharedInputs: [{ env: 'WORK' }],
 };
 
 async function targets(root: string, options: Partial<ShardOptions> = {}) {

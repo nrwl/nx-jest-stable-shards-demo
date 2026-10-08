@@ -1,0 +1,138 @@
+{
+  "alpha/flavor": {
+    "test": "apps/alpha/src/flavor.test.js",
+    "importer": "shared/uses-flavor.js",
+    "specifier": "@acme/flavor",
+    "resolved": "apps/alpha/src/flavors/alpha.js",
+    "leaves": [],
+    "variation": "three configs map one specifier differently, through one shared importer"
+  },
+  "beta/flavor": {
+    "test": "apps/beta/src/flavor.test.js",
+    "importer": "shared/uses-flavor.js",
+    "specifier": "@acme/flavor",
+    "resolved": "apps/beta/src/flavors/beta.js",
+    "leaves": [],
+    "variation": "three configs map one specifier differently, through one shared importer"
+  },
+  "gamma/flavor": {
+    "test": "apps/gamma/src/flavor.test.js",
+    "importer": "shared/uses-flavor.js",
+    "specifier": "@acme/flavor",
+    "resolved": "apps/gamma/src/flavor.js",
+    "leaves": [],
+    "variation": "<rootDir> (apps/gamma/src) differs from the Nx project root (apps/gamma)"
+  },
+  "gamma/plain": {
+    "test": "apps/gamma/src/plain.test.js",
+    "importer": "apps/gamma/src/plain.test.js",
+    "specifier": "./flavor",
+    "resolved": "apps/gamma/src/flavor.js",
+    "leaves": [],
+    "variation": "a relative import under a rootDir below the project root"
+  },
+  "alpha/ui-button": {
+    "test": "apps/alpha/src/ui-button.test.js",
+    "importer": "apps/alpha/src/ui-button.test.js",
+    "specifier": "@acme/ui/button",
+    "resolved": "apps/alpha/src/ui/special-button.js",
+    "leaves": [],
+    "variation": "ordered overlapping patterns: the specific pattern is listed first and wins"
+  },
+  "beta/ui-button": {
+    "test": "apps/beta/src/ui-button.test.js",
+    "importer": "apps/beta/src/ui-button.test.js",
+    "specifier": "@acme/ui/button",
+    "resolved": "apps/beta/src/ui/generic/button.js",
+    "leaves": [],
+    "variation": "ordered overlapping patterns: the general pattern is listed first and wins"
+  },
+  "alpha/ui-card": {
+    "test": "apps/alpha/src/ui-card.test.js",
+    "importer": "apps/alpha/src/ui-card.test.js",
+    "specifier": "@acme/ui/card",
+    "resolved": "apps/alpha/src/ui/generic/card.js",
+    "leaves": [],
+    "variation": "capture-group substitution ($1)"
+  },
+  "alpha/internal": {
+    "test": "apps/alpha/src/internal.test.js",
+    "importer": "apps/alpha/src/internal.test.js",
+    "specifier": "@acme/built/internal/core",
+    "resolved": "pkgs/built/src/core.js",
+    "leaves": [],
+    "variation": "two capture groups ($1 and $2) leaving the project"
+  },
+  "alpha/workspace-package": {
+    "test": "apps/alpha/src/workspace-package.test.js",
+    "importer": "apps/alpha/src/workspace-package.test.js",
+    "specifier": "@acme/alias-to-workspace-package",
+    "resolved": "pkgs/linked/index.js",
+    "leaves": ["pkgs/linked/detail.js"],
+    "variation": "the replacement names a package: a workspace package linked into node_modules, followed to its real location"
+  },
+  "alpha/external-package": {
+    "test": "apps/alpha/src/external-package.test.js",
+    "importer": "apps/alpha/src/external-package.test.js",
+    "specifier": "@acme/alias-to-external-package",
+    "resolved": null,
+    "leaves": [],
+    "variation": "the replacement names a third-party package: external, no closure input"
+  },
+  "alpha/fallback": {
+    "test": "apps/alpha/src/fallback.test.js",
+    "importer": "apps/alpha/src/fallback.test.js",
+    "specifier": "@acme/fallback",
+    "resolved": "apps/alpha/src/fallback.js",
+    "leaves": [],
+    "variation": "a replacement array: the first entry does not exist, the second wins"
+  },
+  "alpha/service": {
+    "test": "apps/alpha/src/service.test.js",
+    "importer": "apps/alpha/src/service.test.js",
+    "specifier": "@acme/service",
+    "resolved": "apps/alpha/test-doubles/service.js",
+    "leaves": ["apps/alpha/test-doubles/service-data.js"],
+    "variation": "a mapped mock with a nested import"
+  },
+  "alpha/built": {
+    "test": "apps/alpha/src/built.test.js",
+    "importer": "apps/alpha/src/built.test.js",
+    "specifier": "@acme/built",
+    "resolved": "pkgs/built/src/index.js",
+    "leaves": ["pkgs/built/src/core.js"],
+    "variation": "a package whose main (lib/index.js) is gitignored and absent, mapped to tracked source"
+  },
+  "beta/built": {
+    "test": "apps/beta/src/built.test.js",
+    "importer": "apps/beta/src/built.test.js",
+    "specifier": "@acme/built",
+    "resolved": "apps/beta/test-doubles/built.js",
+    "leaves": [],
+    "variation": "a package whose main (lib/index.js) is gitignored and absent, mapped to a mock"
+  },
+  "beta/module-path": {
+    "test": "apps/beta/src/module-path.test.js",
+    "importer": "apps/beta/src/module-path.test.js",
+    "specifier": "plain-helper",
+    "resolved": "apps/beta/modules/plain-helper.js",
+    "leaves": [],
+    "variation": "a bare name found through modulePaths"
+  },
+  "alpha/conditional": {
+    "test": "apps/alpha/src/conditional.test.js",
+    "importer": "apps/alpha/src/conditional.test.js",
+    "specifier": "@acme/conditional",
+    "resolved": "pkgs/conditional/node.js",
+    "leaves": [],
+    "variation": "package export conditions of the node environment"
+  },
+  "beta/conditional": {
+    "test": "apps/beta/src/conditional.test.js",
+    "importer": "apps/beta/src/conditional.test.js",
+    "specifier": "@acme/conditional",
+    "resolved": "pkgs/conditional/browser.js",
+    "leaves": [],
+    "variation": "package export conditions from testEnvironmentOptions.customExportConditions"
+  }
+}

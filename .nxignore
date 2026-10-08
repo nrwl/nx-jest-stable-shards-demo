@@ -1,0 +1,2 @@
+# A workspace of its own: scripts/mapper-fixture.ts copies it out and runs Nx there.
+fixtures/mappers
