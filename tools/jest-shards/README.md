@@ -94,7 +94,7 @@ The root `package.json`, `nx.json` and the lockfile are part of every task hash 
 - Multi-project (`projects:`) configs are not supported.
 - Jest's `rootDir` must be the config's directory, which is the default.
 - Tests must not import other tests; the graph fails if one does.
-- dependency-cruiser must resolve what Jest resolves. Mirror every `moduleNameMapper` alias in `resolve`. A static workspace import it cannot resolve fails the graph with the file and the specifier.
+- dependency-cruiser must resolve what Jest resolves. Mirror every `moduleNameMapper` alias in `resolve`. Unresolved relative, absolute, alias-owned, local package and local package subpath imports fail before targets are created. Workspace ownership comes from source package manifests, including nested packages and packages without tests. An unresolved name under any workspace scope also fails; a published sibling that resolves from `node_modules` remains external. Errors name the project/config, importer, specifier and classification. Missing entrypoints and unavailable traversed workspace files fail too. A mapped mock must resolve to an actual file, whose closure is included. Workspace symlinks are followed to their source files. Manifest contents and resolution options partition the content-validated inference cache. There is no ignore-unresolved switch.
 - Computed `require()` calls, runtime file reads, setup files, transformers and `__mocks__` are invisible to import analysis. Declare them in `sharedInputs`.
 - A path containing a backslash fails. Nx has no escape for `(`, `)` and `|`, so each becomes `?`, which also matches any other character in that position.
 
