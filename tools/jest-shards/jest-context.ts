@@ -150,7 +150,9 @@ export class JestProjects {
         moduleDirectories: ['node_modules'],
         rootDir: workspaceRoot,
       }),
-      ['node', 'require', 'default'],
+      // These files may be CommonJS or ES modules. Either way a dependency
+      // that resolves at all lands in node_modules, so both are accepted.
+      ['node', 'import', 'require', 'default'],
     );
   }
 
