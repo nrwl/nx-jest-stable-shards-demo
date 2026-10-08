@@ -1,7 +1,7 @@
 import { cruise } from 'dependency-cruiser';
 import extractTSConfig from 'dependency-cruiser/config-utl/extract-ts-config';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ShardOptions } from './buckets.ts';
 import { classifyWorkspaceImport, workspaceOwnership } from './ownership.ts';
@@ -20,10 +20,17 @@ export async function importClosures(
 ): Promise<Map<string, Set<string>>> {
   const ownership = workspaceOwnership(workspaceRoot);
   const label = (root: string) => labels.get(root) ?? root;
-  const fail = (root: string, importer: string, specifier: string, classification: string) => {
-    throw new Error(
-      `jest-shards: project/config ${label(root)}: ${importer}: '${specifier}' (${classification}); cannot resolve or read workspace import`,
-    );
+  const failures = new Set<string>();
+  const report = (root: string, importer: string, specifier: string, classification: string) => {
+    failures.add(`project/config ${label(root)}: ${importer}: '${specifier}' (${classification})`);
+  };
+  const checkFailures = () => {
+    if (failures.size > 0)
+      throw new Error(
+        'jest-shards: cannot resolve or read these workspace imports. Match ' +
+          "the plugin's resolve options to Jest's moduleNameMapper, or fix the import:\n  " +
+          [...failures].join('\n  '),
+      );
   };
   const availability = new Map<string, boolean>();
   const available = (file: string) => {
@@ -37,13 +44,14 @@ export async function importClosures(
     }
     return availability.get(file)!;
   };
-  for (const root of roots) if (!available(root)) fail(root, root, root, 'graph-entrypoint');
+  for (const root of roots) if (!available(root)) report(root, root, root, 'graph-entrypoint');
+  checkFailures();
   const alias = Object.fromEntries(
     Object.entries(resolve.alias ?? {}).map(([key, target]) => [key, join(workspaceRoot, target)]),
   );
   const tsConfig = resolve.tsConfig ? extractTSConfig(join(workspaceRoot, resolve.tsConfig)) : null;
   const policy = createHash('sha256')
-    .update(JSON.stringify(['ownership-v1', ownership.fingerprint, resolve, tsConfig]))
+    .update(JSON.stringify(['ownership-v2', ownership.fingerprint, resolve, tsConfig]))
     .digest('hex');
   const { output } = await cruise(
     roots,
@@ -52,9 +60,13 @@ export async function importClosures(
       doNotFollow: { path: 'node_modules' },
       // Only the module graph is needed; this halves a cold run at 21k tests.
       skipAnalysisNotInRules: true,
-      // Manifests and resolution policy get a separate namespace. Content
-      // validation also catches unavailable files and uncommitted source edits.
-      cache: { folder: join(workspaceRoot, '.nx/depcruise', policy), strategy: 'content' },
+      // Manifests and resolution policy get a separate namespace. In Git,
+      // metadata checks changed files instead of hashing the whole graph;
+      // workspaces outside Git validate file contents.
+      cache: {
+        folder: join(workspaceRoot, '.nx/depcruise', policy),
+        strategy: existsSync(join(workspaceRoot, '.git')) ? 'metadata' : 'content',
+      },
       preserveSymlinks: false,
       ...(resolve.tsConfig ? { tsConfig: { fileName: resolve.tsConfig } } : {}),
     },
@@ -90,12 +102,17 @@ export async function importClosures(
     const seen = new Set<string>([root]);
     const queue = [root];
     for (const file of queue) {
-      if (!edges.has(file) || !available(file)) fail(root, file, file, 'workspace-file');
+      if (!edges.has(file) || !available(file)) {
+        report(root, file, file, 'workspace-file');
+        continue;
+      }
       for (const missing of unresolved.get(file) ?? [])
-        fail(root, file, missing.specifier, missing.classification);
+        report(root, file, missing.specifier, missing.classification);
       for (const next of edges.get(file)!) {
-        if (!available(next.file) || !edges.has(next.file))
-          fail(root, file, next.specifier, 'workspace-file');
+        if (!available(next.file) || !edges.has(next.file)) {
+          report(root, file, next.specifier, 'workspace-file');
+          continue;
+        }
         if (seen.has(next.file)) continue;
         seen.add(next.file);
         queue.push(next.file);
@@ -104,5 +121,6 @@ export async function importClosures(
     seen.delete(root);
     closures.set(root, seen);
   }
+  checkFailures();
   return closures;
 }

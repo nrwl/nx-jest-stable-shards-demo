@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createGitIgnoreChecker, FsTree } from 'nx/src/devkit-internals.js';
 
 export interface WorkspaceOwnership {
   packages: Map<string, string>;
@@ -8,20 +9,22 @@ export interface WorkspaceOwnership {
   fingerprint: string;
 }
 
-/** Inventory source manifests, including nested roots and packages with no Jest config. */
+/** Inventory nonignored source manifests independently of Jest discovery. */
 export function workspaceOwnership(workspaceRoot: string): WorkspaceOwnership {
   const packages = new Map<string, string>();
   const scopes = new Set<string>();
   const hash = createHash('sha256');
-  const excluded = new Set(['node_modules', '.git', '.nx', '.paperclip']);
+  const ignored = createGitIgnoreChecker(new FsTree(workspaceRoot, false));
   function visit(dir: string) {
+    // A nested checkout owns its own manifests, whether .git is a directory or a worktree file.
+    if (dir && existsSync(join(workspaceRoot, dir, '.git'))) return;
     const entries = readdirSync(join(workspaceRoot, dir), { withFileTypes: true }).sort((a, b) =>
       a.name.localeCompare(b.name),
     );
     for (const entry of entries) {
       const path = join(dir, entry.name);
-      if (entry.isDirectory() && !excluded.has(entry.name)) visit(path);
-      else if (entry.isFile() && entry.name === 'package.json') {
+      if (entry.isDirectory() && !ignored.isIgnoredDirectory(path)) visit(path);
+      else if (entry.isFile() && entry.name === 'package.json' && !ignored.isIgnoredFile(path)) {
         const content = readFileSync(join(workspaceRoot, path), 'utf8');
         hash.update(JSON.stringify([path, content]));
         let manifest;
@@ -32,7 +35,10 @@ export function workspaceOwnership(workspaceRoot: string): WorkspaceOwnership {
         }
         if (typeof manifest.name !== 'string') continue;
         if (packages.has(manifest.name))
-          throw new Error(`jest-shards: duplicate workspace package '${manifest.name}' in ${path}`);
+          throw new Error(
+            `jest-shards: duplicate workspace package '${manifest.name}' in ` +
+              `${join(packages.get(manifest.name)!, 'package.json')} and ${path}`,
+          );
         packages.set(manifest.name, dir || '.');
         if (manifest.name.startsWith('@')) scopes.add(manifest.name.split('/')[0]);
       }
