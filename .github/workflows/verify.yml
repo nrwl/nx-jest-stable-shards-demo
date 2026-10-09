@@ -1,5 +1,6 @@
 # Checks without distribution: install, typecheck, format, unit tests,
-# membership parity on the smoke fixture, and every shard once.
+# membership parity on the smoke fixture, per-project resolution on the mapper
+# fixture, and every shard once.
 name: verify
 
 on:
@@ -28,6 +29,7 @@ jobs:
       - run: pnpm format:check
       - run: pnpm test:unit
       - run: pnpm parity
+      - run: pnpm mappers
       - name: Shard target list
         run: |
           SHARD_TARGETS=$(node scripts/shard-targets.ts)

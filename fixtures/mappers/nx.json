@@ -1,0 +1,14 @@
+{
+  "plugins": [
+    {
+      "plugin": "./tools/jest-shards/plugin.ts",
+      "options": {
+        "testsPerShard": 1,
+        "sharedInputs": [
+          "{workspaceRoot}/**/__mocks__/**/*",
+          "{workspaceRoot}/tools/jest-shards/**/*"
+        ]
+      }
+    }
+  ]
+}

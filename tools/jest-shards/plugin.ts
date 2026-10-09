@@ -7,14 +7,16 @@ import {
 import { createNodes as stockJest } from '@nx/jest/plugin';
 import { Minimatch } from 'minimatch';
 import { existsSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
-import { normalizeOptions, planShards, type ShardOptions } from './buckets.ts';
+import { basename, dirname, join, relative } from 'node:path';
+import { normalizeOptions, planShards, projectRootOf, type ShardOptions } from './buckets.ts';
 import { importClosures, type ClosureMeasurements } from './closures.ts';
+import { JestProjects, type JestProject } from './jest-context.ts';
+import { hashableFiles, workspaceOwnership } from './ownership.ts';
 
 const WS = '{workspaceRoot}/';
 const FILE_TARGET = 'jest-file--';
 
-interface JestProject {
+interface DiscoveredProject {
   configFile: string;
   root: string;
   /** Project-relative, sorted. */
@@ -32,6 +34,7 @@ export const createNodes: CreateNodes<Partial<ShardOptions>> = [stockJest[0], in
 export interface ShardMeasurement {
   root: string;
   name: string;
+  resolutionKey: string;
   members: string[];
   beforeShared: string[];
   afterShared: string[];
@@ -60,35 +63,62 @@ export async function inferShards(
   const options = normalizeOptions(rawOptions);
   const projects = await discover(configFiles, context);
   if (measurements) measurements.discoveryMs = performance.now() - discoveryStarted;
+  const resolutionStarted = performance.now();
   const testFiles = projects.flatMap((p) => p.tests.map((t) => join(p.root, t)));
   checkDiscovery(testFiles, options.isolate);
+
+  const jest = new JestProjects(context.workspaceRoot);
+  const loaded = new Map<string, JestProject>();
+  for (const project of projects) {
+    const jestProject = await jest.load(project.configFile);
+    checkRootDir(context.workspaceRoot, project, jestProject);
+    loaded.set(project.configFile, jestProject);
+  }
 
   const sharedFiles = options.sharedInputs.flatMap((input) =>
     typeof input === 'string' && /^\{workspaceRoot\}\/[^*?[\]{}!]+\.[cm]?[jt]sx?$/.test(input)
       ? [input.slice(WS.length)]
       : [],
   );
-  const closures = await importClosures(
+  const hashable = await hashableFiles(context.workspaceRoot);
+  const preparationMs = performance.now() - resolutionStarted;
+  const { closureOf, external } = await importClosures(
     context.workspaceRoot,
-    [...testFiles, ...sharedFiles],
-    options.resolve,
-    new Map([
-      ...projects.flatMap((p) =>
-        p.tests.map((t) => [join(p.root, t), `${p.root} (${p.configFile})`] as [string, string]),
-      ),
-      ...sharedFiles.map((file) => [file, `shared input ${file}`] as [string, string]),
-    ]),
+    [
+      ...sharedFiles.map((file) => ({
+        file,
+        context: jest.node,
+        config: `shared input ${file}`,
+      })),
+      ...projects.flatMap(({ configFile, root, tests }) => {
+        const { context, nodeLoaded, jestLoaded } = loaded.get(configFile)!;
+        const config = `${root} (${configFile})`;
+        return [
+          ...nodeLoaded.map((file) => ({ file, context: jest.node, config })),
+          ...[...jestLoaded, ...tests.map((t) => join(root, t))].map((file) => ({
+            file,
+            context,
+            config,
+          })),
+        ];
+      }),
+    ],
+    { hashable, ownership: workspaceOwnership(context.workspaceRoot, hashable) },
     measurements?.closures,
   );
-  const tests = new Set(testFiles);
-  for (const test of testFiles) {
-    const imported = [...closures.get(test)!].find((file) => tests.has(file));
-    if (imported) throw new Error(`jest-shards: ${test} imports the test ${imported}`);
+  if (measurements) measurements.closures.resolutionMs += preparationMs;
+  if (external.length > 0 && !measurements) {
+    logger.warn(
+      `jest-shards: Jest cannot resolve ${external.length} imports of names no workspace ` +
+        `package, scope or mapper claims; they are not inputs: ${external.slice(0, 5).join(', ')}` +
+        (external.length > 5 ? ', ...' : ''),
+    );
   }
+  const allTests = new Set(testFiles);
 
-  // Jest loads setup files, the preset and transformers without any test
-  // importing them, so their own imports go to every shard.
-  const shared = new Set(sharedFiles.flatMap((file) => [file, ...closures.get(file)!]));
+  // Declared shared files are loaded outside any test's imports, so their
+  // own imports go to every shard.
+  const shared = new Set(sharedFiles.flatMap((file) => [file, ...closureOf(jest.node, file)]));
   const sharedInputs = [
     ...options.sharedInputs,
     ...[...shared]
@@ -105,17 +135,35 @@ export async function inferShards(
       members.set(shard, [...(members.get(shard) ?? []), join(root, test)]);
     }
 
+    // What Jest loads for every test of this project, found in its config:
+    // the config and preset, transformers, a custom resolver, setup files
+    // and the like, each with its own imports.
+    const { context: resolution, nodeLoaded, jestLoaded } = loaded.get(configFile)!;
+    const projectShared = new Set<string>();
+    for (const file of nodeLoaded) {
+      for (const dep of [file, ...closureOf(jest.node, file)]) projectShared.add(dep);
+    }
+    for (const file of jestLoaded) {
+      for (const dep of [file, ...closureOf(resolution, file)]) projectShared.add(dep);
+    }
+    const projectSharedInputs = [...projectShared]
+      .filter((file) => !shared.has(file) && file !== configFile)
+      .sort()
+      .map(exact);
+
     const targets: Record<string, TargetConfiguration> = {};
     for (const shard of [...members.keys()].sort((a, b) => a - b)) {
       const name = `test-ci--${String(shard).padStart(width, '0')}`;
       const files = members.get(shard)!;
       const inferenceStarted = performance.now();
+      const traversalBefore = measurements?.closures.traversalMs ?? 0;
       const beforeShared = new Set<string>();
       const source = new Set<string>();
       for (const file of files) {
-        for (const dep of closures.get(file)!) {
+        for (const dep of closureOf(resolution, file)) {
           if (measurements) beforeShared.add(dep);
-          if (!shared.has(dep)) source.add(dep);
+          if (allTests.has(dep)) throw new Error(`jest-shards: ${file} imports the test ${dep}`);
+          if (!shared.has(dep) && !projectShared.has(dep)) source.add(dep);
         }
       }
       const cap = measurements?.uncapped
@@ -131,13 +179,17 @@ export async function inferShards(
       measurements?.shards.push({
         root,
         name,
+        resolutionKey: resolution.key,
         members: files,
         beforeShared: [...beforeShared].sort(),
         afterShared: [...source].sort(),
         patterns: capped.patterns,
         stage: capped.stage,
         cap,
-        inferenceMs: performance.now() - inferenceStarted,
+        inferenceMs:
+          performance.now() -
+          inferenceStarted -
+          ((measurements?.closures.traversalMs ?? 0) - traversalBefore),
       });
       targets[name] = {
         executor: 'nx:run-commands',
@@ -148,6 +200,7 @@ export async function inferShards(
           exact(configFile),
           exact(join(root, 'package.json')),
           ...sharedInputs,
+          ...projectSharedInputs,
           ...capped.patterns,
         ],
         outputs: [],
@@ -174,7 +227,7 @@ export async function inferShards(
 async function discover(
   configFiles: readonly string[],
   context: CreateNodesContext,
-): Promise<JestProject[]> {
+): Promise<DiscoveredProject[]> {
   const stockOptions = { targetName: 'jest', ciTargetName: 'jest-file', disableJestRuntime: true };
   const results = await stockJest[1](configFiles, stockOptions, context);
   return results.flatMap(([configFile, result]) =>
@@ -187,6 +240,21 @@ async function discover(
         .sort(),
     })),
   );
+}
+
+/**
+ * The sequencer only knows Jest's `rootDir`, and finds the project root from
+ * it the same way, so the two must agree on which project a test belongs to.
+ */
+function checkRootDir(workspaceRoot: string, project: DiscoveredProject, jest: JestProject) {
+  const root = relative(workspaceRoot, projectRootOf(jest.rootDir, workspaceRoot)) || '.';
+  if (root !== project.root) {
+    throw new Error(
+      `jest-shards: ${project.configFile} sets rootDir to ` +
+        `${relative(workspaceRoot, jest.rootDir) || '.'}, which is not inside its project ` +
+        `(${project.root}) or belongs to a nested Jest config (${root})`,
+    );
+  }
 }
 
 function checkDiscovery(testFiles: string[], isolate: string[]) {

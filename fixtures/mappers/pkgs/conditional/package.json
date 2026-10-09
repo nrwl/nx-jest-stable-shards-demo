@@ -1,0 +1,8 @@
+{
+  "name": "@acme/conditional",
+  "private": true,
+  "exports": {
+    "browser": "./browser.js",
+    "node": "./node.js"
+  }
+}

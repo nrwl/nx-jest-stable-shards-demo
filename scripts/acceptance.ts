@@ -448,14 +448,18 @@ for (const [stage, max] of [
       '--graph=stdout',
     ]);
     const run = exec('node_modules/.bin/nx', ['run-many', '-t', 'test-ci--01']);
-    const output = result.stdout + result.stderr;
-    const ok =
-      result.status !== 0 &&
-      run.status !== 0 &&
-      output.includes(plain1) &&
-      output.includes('@packages/project-001/missing');
+    const output = (result.stdout + result.stderr).replace(/\x1b\[[0-9;]*m/g, '');
+    const named = output
+      .split('\n')
+      .map((line) => line.trim())
+      .find(
+        (line) =>
+          line.startsWith('project/config ') &&
+          line.includes(`: ${plain1}: '@packages/project-001/missing' (mapper-owned)`),
+      );
+    const ok = result.status !== 0 && run.status !== 0 && !!named;
     table.push(
-      `| Unresolved static workspace import | graph fails naming the file and specifier; no green cached result | ${ok ? 'graph failed: `' + plain1 + ": '@packages/project-001/missing'`; affected and run-many exit nonzero" : 'did not fail as expected'} | | | ${verdict(ok)} |`,
+      `| Unresolved mapper-owned static workspace import | graph fails naming project/config, importer, specifier and classification; no green cached result | ${ok ? 'graph failed: `' + named!.split(' (mapper-owned)')[0] + ' (mapper-owned)`; affected and run-many exit nonzero' : 'did not fail as expected'} | | | ${verdict(ok)} |`,
     );
   } finally {
     reset();

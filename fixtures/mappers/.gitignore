@@ -1,0 +1,4 @@
+node_modules
+.nx
+# A build output: `@acme/built` names it as `main`, and it is never committed.
+pkgs/built/lib

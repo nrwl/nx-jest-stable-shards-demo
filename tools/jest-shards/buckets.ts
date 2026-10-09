@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 export interface ShardOptions {
   /** Target maximum average of regular (non-isolated) tests per hash bucket. */
@@ -13,8 +13,6 @@ export interface ShardOptions {
   sharedInputs: (string | { env: string })[];
   /** Budget for one shard's source closure before it collapses to globs. */
   maxClosureInputs: number;
-  /** dependency-cruiser resolution; must match Jest's moduleNameMapper. */
-  resolve: { alias?: Record<string, string>; tsConfig?: string };
 }
 
 export const PLUGIN_PATH = './tools/jest-shards/plugin.ts';
@@ -26,7 +24,6 @@ export function normalizeOptions(raw: Partial<ShardOptions> = {}): ShardOptions 
     isolate: [],
     sharedInputs: [],
     maxClosureInputs: 1000,
-    resolve: {},
     ...raw,
   };
   const duplicate = options.isolate.find((path, i) => options.isolate.indexOf(path) !== i);
@@ -64,6 +61,22 @@ export function readOptions(workspaceRoot: string): ShardOptions {
   );
   if (!entry) throw new Error(`jest-shards: nx.json has no plugin entry for ${PLUGIN_PATH}`);
   return normalizeOptions(entry.options);
+}
+
+const JEST_CONFIGS = ['js', 'cjs', 'mjs', 'ts', 'cts', 'mts'].map((ext) => `jest.config.${ext}`);
+
+/**
+ * The Nx project root that owns a Jest `rootDir`: the nearest directory at or
+ * above it that holds a Jest config. Jest's `rootDir` may be a subdirectory
+ * (`rootDir: 'src'`), while shard plans are keyed by the project root.
+ */
+export function projectRootOf(rootDir: string, workspaceRoot: string): string {
+  for (let dir = rootDir; ; dir = dirname(dir)) {
+    if (JEST_CONFIGS.some((name) => existsSync(join(dir, name)))) return dir;
+    if (dir === workspaceRoot || dirname(dir) === dir) {
+      throw new Error(`jest-shards: no Jest config at or above the rootDir ${rootDir}`);
+    }
+  }
 }
 
 export interface ShardPlan {

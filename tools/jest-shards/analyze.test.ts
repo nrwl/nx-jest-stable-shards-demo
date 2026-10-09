@@ -19,6 +19,8 @@ import { normalizeOptions, planShards } from './buckets.ts';
 process.env.NX_DAEMON = 'false';
 const { analyze } = await import('./analyze.ts');
 const { importClosures } = await import('./closures.ts');
+const { JestProjects } = await import('./jest-context.ts');
+const { hashableFiles, workspaceOwnership } = await import('./ownership.ts');
 const root = mkdtempSync(join(tmpdir(), 'closure-diagnostics-'));
 generateDeepHub(root);
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -110,8 +112,13 @@ test('project cap override does not change bucket sizing, and comparison cap ove
 });
 
 test('missing exact roots and unresolved imports are errors', async () => {
+  const hashable = await hashableFiles(root);
   await assert.rejects(
-    importClosures(root, ['missing.test.js'], {}),
+    importClosures(
+      root,
+      [{ file: 'missing.test.js', context: new JestProjects(root).node, config: 'missing' }],
+      { hashable, ownership: workspaceOwnership(root, hashable) },
+    ),
     /missing.test.js.*graph-entrypoint/,
   );
   const missing = join(root, 'packages/small/tests/case-0.test.js');
@@ -258,7 +265,7 @@ test('unresolved external and observed unsupported module counts come from the a
   }
 });
 
-test('coverage and discovery honor Nx ignore rules without counting ignored imports as extra files', async () => {
+test('coverage and discovery honor Nx ignore rules and imported ignored files fail', async () => {
   const ignoredRoot = mkdtempSync(join(tmpdir(), 'closure-ignores-'));
   const write = (file: string, content: string) => {
     mkdirSync(join(ignoredRoot, file, '..'), { recursive: true });
@@ -272,7 +279,7 @@ test('coverage and discovery honor Nx ignore rules without counting ignored impo
     write('app/project.json', '{"name":"ignore-fixture"}');
     write('app/package.json', '{"private":true}');
     write('app/jest.config.js', "module.exports = { testMatch: ['*.test.js'] };\n");
-    write('app/a.test.js', "require('./src/leaf'); require('./src/ignored');\n");
+    write('app/a.test.js', "require('./src/leaf');\n");
     write('app/src/leaf.js', 'module.exports = 1;');
     write('app/src/ignored.js', 'module.exports = 2;');
     write('app/src/.gitignore', '*.log\n!kept.log\n');
@@ -287,17 +294,90 @@ test('coverage and discovery honor Nx ignore rules without counting ignored impo
     assert.equal(widened.summary.projectCount, 1);
     assert.equal(widened.summary.shardCount, 1);
     assert.equal(widened.shards[0].stage, 'roots');
-    assert.equal(widened.shards[0].exactClosureAfterShared, 2);
+    assert.equal(widened.shards[0].exactClosureAfterShared, 1);
     assert.equal(widened.shards[0].hashableExactClosureAfterShared, 1);
     assert.equal(widened.shards[0].coveredFileCount, 7);
     assert.equal(widened.shards[0].extraCoveredFiles, 6);
     assert.equal(widened.projects[0].extraCoveredFiles, 6);
     const exact = await analyze(ignoredRoot, { cap: 'uncapped' });
-    assert.equal(exact.shards[0].exactClosureAfterShared, 2);
+    assert.equal(exact.shards[0].exactClosureAfterShared, 1);
     assert.equal(exact.shards[0].coveredFileCount, 1);
     assert.equal(exact.shards[0].extraCoveredFiles, 0);
     assert.equal(exact.projects[0].hashableExactClosureAfterShared, 1);
+    write('app/a.test.js', "require('./src/leaf'); require('./src/ignored');\n");
+    await assert.rejects(analyze(ignoredRoot, { cap: 'uncapped' }), /Nx does not hash it/);
   } finally {
     rmSync(ignoredRoot, { recursive: true, force: true });
+  }
+});
+
+test('usage errors give fixed instructions without exposing arbitrary arguments', () => {
+  for (const args of [
+    ['--cap=1000'],
+    ['--cap'],
+    ['--cap', 'private-package'],
+    ['--unknown-private-path'],
+  ]) {
+    const result = spawnSync(process.execPath, [resolve('tools/jest-shards/analyze.ts'), ...args], {
+      encoding: 'utf8',
+      timeout: 60000,
+    });
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /Usage:|Invalid cap/);
+    assert.ok(!result.stderr.includes('private'));
+    assert.ok(!result.stderr.includes('--raw for details'));
+  }
+});
+
+test('measurements follow each project mapper and remove its configured setup closure', async () => {
+  const ws = mkdtempSync(join(tmpdir(), 'closure-contexts-'));
+  const write = (file: string, content: string) => {
+    mkdirSync(join(ws, file, '..'), { recursive: true });
+    writeFileSync(join(ws, file), content);
+  };
+  try {
+    write('nx.json', JSON.stringify({ plugins: [{ plugin: './tools/jest-shards/plugin.ts' }] }));
+    write('package.json', '{"private":true}');
+    write('shared/importer.js', "require('flavor');\n");
+    for (const project of ['alpha', 'beta']) {
+      write(`${project}/project.json`, JSON.stringify({ name: project }));
+      write(
+        `${project}/jest.config.js`,
+        `module.exports = {
+        testMatch: ['*.test.js'],
+        moduleNameMapper: { '^flavor$': '<rootDir>/flavor.js' },
+        setupFiles: ['<rootDir>/setup.js'],
+      };\n`,
+      );
+      write(`${project}/a.test.js`, "require('../shared/importer'); require('./setup');\n");
+      write(`${project}/setup.js`, "require('./setup-leaf');\n");
+      write(`${project}/setup-leaf.js`, 'module.exports = 1;');
+    }
+    write('alpha/flavor.js', "require('unavailable-external'); require('./style.css');\n");
+    write('alpha/style.css', 'body { color: red; }');
+    write('beta/flavor.js', 'module.exports = 1;');
+    symlinkSync(resolve('node_modules'), join(ws, 'node_modules'), 'dir');
+    const report = await analyze(ws, { raw: true, cap: 'uncapped' });
+    const alpha = report.shards.find((s) => s.root === 'alpha')!;
+    const beta = report.shards.find((s) => s.root === 'beta')!;
+    assert.equal(alpha.unresolvedCount, 1);
+    assert.equal(alpha.unsupportedCount, 1);
+    assert.equal(beta.unresolvedCount, 0);
+    assert.equal(beta.unsupportedCount, 0);
+    assert.deepEqual(alpha.exactClosure, [
+      'alpha/flavor.js',
+      'alpha/style.css',
+      'shared/importer.js',
+    ]);
+    assert.deepEqual(beta.exactClosure, ['beta/flavor.js', 'shared/importer.js']);
+    assert.equal(alpha.exactClosureBeforeShared - alpha.exactClosureAfterShared, 2);
+    assert.equal(beta.exactClosureBeforeShared - beta.exactClosureAfterShared, 2);
+    assert.equal(alpha.hubFanIn, 1);
+    assert.equal(beta.hubFanIn, 1);
+    assert.equal(report.projects[0].unresolvedCount, 1);
+    assert.equal(report.projects[1].unresolvedCount, 0);
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
   }
 });

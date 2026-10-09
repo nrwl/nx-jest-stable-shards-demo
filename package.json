@@ -15,16 +15,22 @@
     "parity": "node scripts/parity.ts",
     "acceptance": "node scripts/acceptance.ts",
     "analyze": "NX_DAEMON=false NX_SKIP_NX_CACHE=true NX_NO_CLOUD=true node tools/jest-shards/analyze.ts",
-    "fixture:deep-hub": "node scripts/generate-deep-hub.ts"
+    "fixture:deep-hub": "node scripts/generate-deep-hub.ts",
+    "mappers": "node scripts/mapper-fixture.ts"
   },
   "devDependencies": {
     "@jest/test-sequencer": "29.7.0",
+    "@jest/types": "29.6.3",
     "@nx/devkit": "23.3.0-beta.7",
     "@nx/jest": "23.3.0-beta.7",
     "@nx/js": "23.3.0-beta.7",
     "@types/node": "^24.19.0",
     "dependency-cruiser": "^18.4.0",
     "jest": "29.7.0",
+    "jest-config": "29.7.0",
+    "jest-haste-map": "29.7.0",
+    "jest-resolve": "29.7.0",
+    "jest-runtime": "29.7.0",
     "minimatch": "10.2.5",
     "nx": "23.3.0-beta.7",
     "prettier": "^3.9.9",

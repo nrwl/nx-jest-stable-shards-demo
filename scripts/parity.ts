@@ -83,7 +83,11 @@ for (const node of Object.values(graph.nodes)) {
 }
 
 // A config that stock inference skipped would otherwise vanish silently.
-const onDisk = globSync(stockJest[0], { cwd: workspaceRoot, exclude: ['**/node_modules/**'] });
+const onDisk = globSync(stockJest[0], {
+  cwd: workspaceRoot,
+  // fixtures/mappers is a workspace of its own (see .nxignore).
+  exclude: ['**/node_modules/**', 'fixtures/mappers/**'],
+});
 const missing = onDisk.filter((config) => !configsWithShards.has(config));
 report(
   missing.length === 0,

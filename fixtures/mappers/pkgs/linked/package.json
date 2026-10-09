@@ -1,0 +1,5 @@
+{
+  "name": "@acme/linked",
+  "private": true,
+  "main": "index.js"
+}

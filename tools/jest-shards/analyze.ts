@@ -10,6 +10,8 @@ import {
 import { PLUGIN_PATH, normalizeOptions } from './buckets.ts';
 import { inferShards, createNodes, type InferenceMeasurements } from './plugin.ts';
 
+class UsageError extends Error {}
+
 export interface AnalyzeOptions {
   cap?: number | 'uncapped';
   raw?: boolean;
@@ -20,7 +22,7 @@ export async function analyze(workspaceRoot: string, options: AnalyzeOptions = {
   const started = performance.now();
   const nxJson = JSON.parse(readFileSync(join(workspaceRoot, 'nx.json'), 'utf8'));
   const entry = nxJson.plugins?.find((p: { plugin?: string }) => p.plugin === PLUGIN_PATH);
-  if (!entry) throw new Error('No shard plugin configuration');
+  if (!entry) throw new UsageError('No shard plugin configuration in nx.json');
   const shardOptions = normalizeOptions(entry.options);
   if (typeof options.cap === 'number') {
     shardOptions.maxClosureInputs = options.cap;
@@ -35,9 +37,7 @@ export async function analyze(workspaceRoot: string, options: AnalyzeOptions = {
     closures: {
       resolutionMs: 0,
       traversalMs: 0,
-      fanIn: new Map(),
-      unresolved: new Map(),
-      unsupported: new Set(),
+      contexts: new Map(),
     },
     shards: [],
     uncapped: options.cap === 'uncapped',
@@ -85,6 +85,7 @@ export async function analyze(workspaceRoot: string, options: AnalyzeOptions = {
   const coveredByProject = new Map<string, Set<string>>();
   const patternsByProject = new Map<string, Set<string>>();
   const shards = measurements.shards.map((s, index) => {
+    const observed = measurements.closures.contexts.get(s.resolutionKey)!;
     const covered = new Set(s.patterns.flatMap((p) => coverage.get(p)!));
     const hashableExactClosureAfterShared = s.afterShared.filter((f) => covered.has(f)).length;
     const projectCoverage = coveredByProject.get(s.root) ?? new Set<string>();
@@ -106,16 +107,9 @@ export async function analyze(workspaceRoot: string, options: AnalyzeOptions = {
       coveredFileCount: covered.size,
       hashableExactClosureAfterShared,
       extraCoveredFiles: covered.size - hashableExactClosureAfterShared,
-      hubFanIn: s.afterShared.reduce(
-        (max, f) => Math.max(max, measurements.closures.fanIn.get(f) ?? 0),
-        0,
-      ),
-      unresolvedCount: [...reachable].reduce(
-        (n, f) => n + (measurements.closures.unresolved.get(f) ?? 0),
-        0,
-      ),
-      unsupportedCount: [...reachable].filter((f) => measurements.closures.unsupported.has(f))
-        .length,
+      hubFanIn: s.afterShared.reduce((max, f) => Math.max(max, observed.fanIn.get(f) ?? 0), 0),
+      unresolvedCount: [...reachable].reduce((n, f) => n + (observed.unresolved.get(f) ?? 0), 0),
+      unsupportedCount: [...reachable].filter((f) => observed.unsupported.has(f)).length,
       timingsMs: {
         discovery: measurements.discoveryMs,
         resolution: measurements.closures.resolutionMs,
@@ -144,6 +138,8 @@ export async function analyze(workspaceRoot: string, options: AnalyzeOptions = {
     version: 1,
     cap: options.cap ?? 'configured',
     projects: projects.map((project, index) => {
+      const source = measurements.shards.find((s) => s.root === roots[index])!;
+      const observed = measurements.closures.contexts.get(source.resolutionKey)!;
       const rows = shards.filter((s) => s.projectId === project.id);
       const reachable = new Set(
         measurements.shards
@@ -168,12 +164,8 @@ export async function analyze(workspaceRoot: string, options: AnalyzeOptions = {
         hashableExactClosureAfterShared,
         extraCoveredFiles: covered.size - hashableExactClosureAfterShared,
         hubFanIn: rows.reduce((max, s) => Math.max(max, s.hubFanIn), 0),
-        unresolvedCount: [...reachable].reduce(
-          (n, f) => n + (measurements.closures.unresolved.get(f) ?? 0),
-          0,
-        ),
-        unsupportedCount: [...reachable].filter((f) => measurements.closures.unsupported.has(f))
-          .length,
+        unresolvedCount: [...reachable].reduce((n, f) => n + (observed.unresolved.get(f) ?? 0), 0),
+        unsupportedCount: [...reachable].filter((f) => observed.unsupported.has(f)).length,
         timingsMs: {
           discovery: measurements.discoveryMs,
           resolution: measurements.closures.resolutionMs,
@@ -227,13 +219,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
         const value = args[++i];
         cap = value === 'uncapped' ? value : Number(value);
         if (cap !== 'uncapped' && !(Number.isInteger(cap) && cap >= 0))
-          throw new Error('Invalid cap');
-      } else throw new Error('Unknown argument');
+          throw new UsageError('Invalid cap. Use --cap with a nonnegative integer or uncapped.');
+      } else
+        throw new UsageError(
+          'Usage: analyze [--workspace directory] [--cap integer|uncapped] [--raw]',
+        );
     }
     const report = await analyze(workspaceRoot, { cap, raw });
     stdout(JSON.stringify(report, null, 2) + '\n');
   } catch (error) {
-    stderr(raw ? String(error) + '\n' : 'Analysis failed. Rerun locally with --raw for details.\n');
+    stderr(
+      raw || error instanceof UsageError
+        ? String(error) + '\n'
+        : 'Analysis failed. Rerun locally with --raw for details.\n',
+    );
     process.exitCode = 1;
   } finally {
     process.stdout.write = stdout;
