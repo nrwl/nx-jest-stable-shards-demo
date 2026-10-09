@@ -7,7 +7,8 @@ import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 // that touches them, and it is written against 29.x: `readConfig` and
 // `readInitialOptions` from jest-config, `Runtime.createResolver` (the factory
 // Jest's runtime builds its resolver with), `ModuleMap.create` and the
-// `Resolver` methods `isCoreModule`, `resolveModule` and `findNodeModule`.
+// `Resolver` methods `isCoreModule`, `resolveModule`, `findNodeModule` and
+// `clearDefaultResolverCache`.
 const require = createRequire(import.meta.url);
 const SUPPORTED_JEST = '29.';
 for (const name of ['jest-config', 'jest-runtime', 'jest-resolve', 'jest-haste-map']) {
@@ -41,41 +42,54 @@ export class ResolutionContext {
   readonly key: string;
   readonly #workspaceRoot: string;
   readonly #resolver: JestResolver;
-  readonly #conditions: string[];
-  readonly #memo = new Map<string, Resolution>();
+  /** One set per way the importer may be loaded; a Jest context has exactly one. */
+  readonly #conditions: string[][];
+  readonly #memo = new Map<string, Resolution[]>();
 
-  constructor(key: string, workspaceRoot: string, resolver: JestResolver, conditions: string[]) {
+  constructor(key: string, workspaceRoot: string, resolver: JestResolver, conditions: string[][]) {
     this.key = key;
     this.#workspaceRoot = workspaceRoot;
     this.#resolver = resolver;
     this.#conditions = conditions;
   }
 
-  /** `importer` is workspace-relative. */
-  resolve(importer: string, specifier: string): Resolution {
+  /**
+   * `importer` is workspace-relative. Every file the specifier can load is
+   * returned: one per condition set, without repeats. A condition set that
+   * does not resolve is an error only when none does.
+   */
+  resolve(importer: string, specifier: string): Resolution[] {
     // Jest resolves against the importer's directory, so that is the memo key.
     const memoKey = `${dirname(importer)}\0${specifier}`;
-    let resolution = this.#memo.get(memoKey);
-    if (!resolution) {
-      resolution = this.#resolve(join(this.#workspaceRoot, importer), specifier);
-      this.#memo.set(memoKey, resolution);
+    let resolutions = this.#memo.get(memoKey);
+    if (!resolutions) {
+      resolutions = this.#resolve(join(this.#workspaceRoot, importer), specifier);
+      this.#memo.set(memoKey, resolutions);
     }
-    return resolution;
+    return resolutions;
   }
 
-  #resolve(importer: string, specifier: string): Resolution {
+  #resolve(importer: string, specifier: string): Resolution[] {
     // The runtime's order: a core module unless a mapper claims the name
     // (`isCoreModule` checks that), then mappers, then node resolution.
-    if (this.#resolver.isCoreModule(specifier)) return { kind: 'core' };
-    let resolved: string;
-    try {
-      resolved = this.#resolver.resolveModule(importer, specifier, {
-        conditions: this.#conditions,
-      });
-    } catch (error) {
-      return { kind: 'error', message: firstLines(error) };
+    if (this.#resolver.isCoreModule(specifier)) return [{ kind: 'core' }];
+    const found = new Map<string, Resolution>();
+    const errors: Resolution[] = [];
+    for (const conditions of this.#conditions) {
+      let resolution: Resolution;
+      try {
+        resolution = classify(
+          this.#workspaceRoot,
+          this.#resolver.resolveModule(importer, specifier, { conditions }),
+        );
+      } catch (error) {
+        resolution = { kind: 'error', message: firstLines(error) };
+      }
+      if (resolution.kind === 'error') errors.push(resolution);
+      else
+        found.set(resolution.kind === 'workspace' ? resolution.file : resolution.kind, resolution);
     }
-    return classify(this.#workspaceRoot, resolved);
+    return found.size > 0 ? [...found.values()] : errors.slice(0, 1);
   }
 }
 
@@ -137,10 +151,14 @@ export class JestProjects {
 
   constructor(workspaceRoot: string) {
     this.#workspaceRoot = workspaceRoot;
-    // A config edited since the last graph build in this process must be read again.
+    // A graph process outlives a build, and what was read for the last one
+    // may have changed since: configs in Node's module cache, and the file
+    // checks, real paths and package manifests jest-resolve keeps for the
+    // whole process.
     for (const file of Object.keys(require.cache)) {
       if (classify(workspaceRoot, file).kind === 'workspace') delete require.cache[file];
     }
+    Resolver.clearDefaultResolverCache();
     this.node = new ResolutionContext(
       'node',
       workspaceRoot,
@@ -150,9 +168,13 @@ export class JestProjects {
         moduleDirectories: ['node_modules'],
         rootDir: workspaceRoot,
       }),
-      // These files may be CommonJS or ES modules. Either way a dependency
-      // that resolves at all lands in node_modules, so both are accepted.
-      ['node', 'import', 'require', 'default'],
+      // Node picks a package export by how the importer loads it, and that
+      // is not known here: a TypeScript config's `import` may run as a
+      // `require`. Both branches are inputs, so the one Node runs is among them.
+      [
+        [...NODE_CONDITIONS, 'require'],
+        [...NODE_CONDITIONS, 'import'],
+      ],
     );
   }
 
@@ -162,9 +184,17 @@ export class JestProjects {
     const fail = (message: string): never => {
       throw new Error(`jest-shards: ${configFile}: ${message}`);
     };
+    // The one evaluation of the config file. Normalizing the options it
+    // returned, instead of the path, keeps an async config from running twice.
     const { config: initial } = await readInitialOptions(path);
     if (initial.projects) fail('multi-project (`projects:`) configs are not supported');
-    const { projectConfig, globalConfig } = await readConfig({ _: [], $0: '' }, path);
+    const preset = initial.preset;
+    const { projectConfig, globalConfig } = await readConfig(
+      { _: [], $0: '' },
+      initial,
+      false,
+      dirname(path),
+    );
 
     const conditions = exportConditions(projectConfig) ?? fail(UNKNOWN_ENVIRONMENT);
     // Everything Jest's resolver reads. `rootDir` is already substituted into
@@ -185,7 +215,7 @@ export class JestProjects {
         key,
         this.#workspaceRoot,
         Runtime.createResolver(projectConfig, ModuleMap.create(projectConfig.rootDir)),
-        conditions,
+        [conditions],
       );
       this.#contexts.set(key, context);
     }
@@ -196,7 +226,7 @@ export class JestProjects {
       context,
       nodeLoaded: this.#workspaceFiles([
         path,
-        presetFile(initial, projectConfig.rootDir),
+        presetFile(preset, projectConfig.rootDir),
         ...projectConfig.transform.map(([, transformer]) => transformer),
         projectConfig.resolver,
         projectConfig.testEnvironment,
@@ -227,6 +257,8 @@ export class JestProjects {
   }
 }
 
+const NODE_CONDITIONS = ['node', 'node-addons', 'default'];
+
 const UNKNOWN_ENVIRONMENT =
   'cannot tell which package export conditions its testEnvironment uses; ' +
   'set testEnvironmentOptions.customExportConditions';
@@ -249,9 +281,9 @@ function exportConditions(config: Config.ProjectConfig): string[] | undefined {
 }
 
 /** The preset module, found the way jest-config's `setupPreset` finds it. */
-function presetFile(initial: Config.InitialOptions, rootDir: string): string | null {
-  if (!initial.preset) return null;
-  const preset = replaceRootDirInPath(rootDir, initial.preset);
+function presetFile(declared: string | null | undefined, rootDir: string): string | null {
+  if (!declared) return null;
+  const preset = replaceRootDirInPath(rootDir, declared);
   return Resolver.findNodeModule(preset.startsWith('.') ? preset : join(preset, 'jest-preset'), {
     basedir: rootDir,
     extensions: ['.json', '.js', '.cjs', '.mjs'],

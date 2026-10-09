@@ -284,6 +284,19 @@ const failing: [string, string[], () => void][] = [
     },
   ],
   [
+    'Add a gitignored setup file with no imports',
+    ['pkgs/built/lib/setup.js', 'ignored by git'],
+    () => {
+      edit(
+        'apps/alpha/jest.config.js',
+        "displayName: 'alpha',",
+        "displayName: 'alpha',\n  setupFiles: ['<rootDir>/../../pkgs/built/lib/setup.js'],",
+      );
+      mkdirSync(join(ws, 'pkgs/built/lib'), { recursive: true });
+      writeFileSync(join(ws, 'pkgs/built/lib/setup.js'), 'global.fromSetup = 1;\n');
+    },
+  ],
+  [
     'Import a specifier no config maps, from the shared importer',
     ['apps/alpha/jest.config.js', 'shared/uses-flavor.js', "'@acme/nowhere'"],
     () => appendFileSync(join(ws, 'shared/uses-flavor.js'), "require('@acme/nowhere');\n"),

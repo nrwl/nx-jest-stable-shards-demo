@@ -1,10 +1,20 @@
 import type { CreateNodesContext, TargetConfiguration } from '@nx/devkit';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, describe, test } from 'node:test';
 import { normalizeOptions, planShards, type ShardOptions } from './buckets.ts';
+import { JestProjects } from './jest-context.ts';
 import { createNodes } from './plugin.ts';
 import StableShardSequencer from './sequencer.ts';
 
@@ -112,6 +122,12 @@ function workspace(overrides: Record<string, string | null> = {}): string {
     writeFileSync(join(root, file), content);
   }
   return root;
+}
+
+/** Links a workspace package into the root `node_modules`, as a package manager does. */
+function link(root: string, name: string, target: string) {
+  mkdirSync(dirname(join(root, 'node_modules', name)), { recursive: true });
+  symlinkSync(join(root, target), join(root, 'node_modules', name));
 }
 
 const baseOptions: Partial<ShardOptions> = {
@@ -275,6 +291,102 @@ describe('plugin', () => {
       assert.ok(!app.includes(WS + 'packages/lib/' + file), `${file} is not an input of app`);
     }
     for (const inputs of [lib, app]) assert.ok(inputs.includes(WS + 'jest.preset.js'), 'preset');
+  });
+
+  test('a second build in the same process sees what changed on disk', async () => {
+    const root = workspace({
+      'packages/app/jest.config.js':
+        "module.exports = { preset: '../../jest.preset.js', moduleNameMapper: " +
+        "{ '^@acme/first$': ['<rootDir>/src/preferred.js', '<rootDir>/src/fallback.js'] } };\n",
+      'packages/app/src/a.test.js': "require('@acme/pkg');\nrequire('@acme/first');\n",
+      'packages/app/src/fallback.js': '',
+      'packages/pkg/package.json': '{ "name": "@acme/pkg", "main": "a.js" }',
+      'packages/pkg/a.js': '',
+      'packages/pkg/b.js': '',
+    });
+    link(root, '@acme/pkg', 'packages/pkg');
+    const test = 'packages/app/src/a.test.js';
+    const before = shardWith(await targets(root), 'packages/app', test);
+    assert.ok(before.includes(WS + 'packages/pkg/a.js'));
+    assert.ok(before.includes(WS + 'packages/app/src/fallback.js'));
+
+    writeFileSync(
+      join(root, 'packages/pkg/package.json'),
+      '{ "name": "@acme/pkg", "main": "b.js" }',
+    );
+    writeFileSync(join(root, 'packages/app/src/preferred.js'), '');
+    const after = shardWith(await targets(root), 'packages/app', test);
+    assert.ok(after.includes(WS + 'packages/pkg/b.js'), 'the new `main`');
+    assert.ok(!after.includes(WS + 'packages/pkg/a.js'), 'the old `main`');
+    assert.ok(after.includes(WS + 'packages/app/src/preferred.js'), 'the earlier replacement');
+    assert.ok(!after.includes(WS + 'packages/app/src/fallback.js'), 'the later replacement');
+  });
+
+  test('a package with import and require exports gives both to what Node loads', async () => {
+    const root = workspace({
+      'packages/lib/jest.config.js':
+        "require('@acme/dual');\nmodule.exports = { preset: '../../jest.preset.js', " +
+        "transform: { '\\\\.js$': '<rootDir>/transform.js' } };\n",
+      'packages/lib/transform.js':
+        "require('@acme/dual/tool');\nmodule.exports = { process: (code) => ({ code }) };\n",
+      'packages/dual/package.json': JSON.stringify({
+        name: '@acme/dual',
+        exports: {
+          '.': { import: './index.mjs', require: './index.cjs' },
+          './tool': { import: './tool.mjs', require: './tool.cjs' },
+        },
+      }),
+      'packages/dual/index.mjs': '',
+      'packages/dual/index.cjs': "require('./cjs-only.cjs');\n",
+      'packages/dual/cjs-only.cjs': '',
+      'packages/dual/tool.mjs': '',
+      'packages/dual/tool.cjs': '',
+    });
+    link(root, '@acme/dual', 'packages/dual');
+    const byProject = await targets(root);
+    const lib = shardWith(byProject, 'packages/lib', 'packages/lib/src/util.test.js');
+    const app = shardWith(byProject, 'packages/app', 'packages/app/src/a.test.js');
+    for (const file of ['index.mjs', 'index.cjs', 'cjs-only.cjs', 'tool.mjs', 'tool.cjs']) {
+      assert.ok(lib.includes(WS + 'packages/dual/' + file), file);
+      assert.ok(!app.includes(WS + 'packages/dual/' + file), `${file} is not an input of app`);
+    }
+  });
+
+  test('a gitignored file fails the graph, whether imported or loaded by the config', async () => {
+    const ignored = async (overrides: Record<string, string>) => {
+      const root = workspace({ '.gitignore': 'local/\n', ...overrides });
+      assert.equal(spawnSync('git', ['init', '-q'], { cwd: root }).status, 0);
+      return targets(root);
+    };
+    // A setup file with no imports: nothing reaches it, it is only a root.
+    await assert.rejects(
+      ignored({
+        'packages/lib/jest.config.js':
+          "module.exports = { preset: '../../jest.preset.js', setupFiles: ['<rootDir>/local/setup.js'] };\n",
+        'packages/lib/local/setup.js': 'global.x = 1;\n',
+      }),
+      /packages\/lib\/local\/setup\.js is loaded or imported but ignored by git/,
+    );
+    await assert.rejects(
+      ignored({
+        'packages/lib/src/util.js': "require('../local/built');\n",
+        'packages/lib/local/built.js': '',
+      }),
+      /packages\/lib\/local\/built\.js is loaded or imported but ignored by git/,
+    );
+    await ignored({});
+  });
+
+  test('a config is evaluated once per load', async () => {
+    const root = workspace({
+      'packages/lib/jest.config.js':
+        "module.exports = async () => {\n  require('node:fs').appendFileSync(__dirname + '/calls', 'x');\n" +
+        "  return { preset: '../../jest.preset.js' };\n};\n",
+    });
+    const project = await new JestProjects(root).load('packages/lib/jest.config.js');
+    assert.equal(readFileSync(join(root, 'packages/lib/calls'), 'utf8'), 'x');
+    assert.equal(project.rootDir, join(root, 'packages/lib'));
+    assert.deepEqual(project.jestLoaded, ['tools/setup.js'], 'the preset still applies');
   });
 
   test('a declared shared file that is missing fails the graph', async () => {

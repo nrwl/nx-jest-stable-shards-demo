@@ -62,16 +62,17 @@ export async function importClosures(
       }
       const followed = new Set<string>();
       for (const specifier of specifiersOf.get(file)!) {
-        const resolution = context.resolve(file, specifier);
-        if (resolution.kind === 'error') {
-          problems.push(`${config}: ${file}: '${specifier}': ${resolution.message}`);
-        } else if (resolution.kind === 'workspace') {
-          followed.add(resolution.file);
-          enqueue({ file: resolution.file, context, config }, next);
-          // A package name resolves through its manifest (`main`, `exports`).
-          if (!/^[./]/.test(specifier)) {
-            const manifest = nearestManifest(workspaceRoot, resolution.file, manifests);
-            if (manifest) followed.add(manifest);
+        for (const resolution of context.resolve(file, specifier)) {
+          if (resolution.kind === 'error') {
+            problems.push(`${config}: ${file}: '${specifier}': ${resolution.message}`);
+          } else if (resolution.kind === 'workspace') {
+            followed.add(resolution.file);
+            enqueue({ file: resolution.file, context, config }, next);
+            // A package name resolves through its manifest (`main`, `exports`).
+            if (!/^[./]/.test(specifier)) {
+              const manifest = nearestManifest(workspaceRoot, resolution.file, manifests);
+              if (manifest) followed.add(manifest);
+            }
           }
         }
       }
@@ -82,14 +83,19 @@ export async function importClosures(
     wave = next;
   }
 
-  const reached = new Set<string>();
+  // Roots count as well as what they reach: a setup file with no imports is
+  // an input all the same.
+  const inputs = new Set<string>();
   for (const contextEdges of edges.values()) {
-    for (const targets of contextEdges.values()) for (const file of targets) reached.add(file);
+    for (const [file, targets] of contextEdges) {
+      inputs.add(file);
+      for (const target of targets) inputs.add(target);
+    }
   }
-  for (const file of gitIgnored(workspaceRoot, [...reached])) {
+  for (const file of gitIgnored(workspaceRoot, [...inputs])) {
     problems.push(
-      `${file} is imported but ignored by git, so Nx cannot hash it. Map the import to ` +
-        'tracked source or a mock in moduleNameMapper',
+      `${file} is loaded or imported but ignored by git, so Nx cannot hash it. Track it, ` +
+        'or map the import to tracked source or a mock in moduleNameMapper',
     );
   }
   if (problems.length > 0) {

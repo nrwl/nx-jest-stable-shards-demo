@@ -25,7 +25,7 @@ test -n "$SHARD_TARGETS"
 pnpm exec nx run-many -t "$SHARD_TARGETS" --parallel=3
 ```
 
-Expect `PARITY OK`, `45/45 rows pass` from the mapper fixture and 64 successful tasks. `nx.json` points to the demo's Nx Cloud staging workspace; local checks need no CI token. To generate all 21,093 tests, run `node scripts/generate-fixture.ts --preset full`; this replaces `packages/`, so do it in a disposable checkout. Generate `--preset smoke` there to restore the smoke fixture.
+Expect `PARITY OK`, `46/46 rows pass` from the mapper fixture and 64 successful tasks. `nx.json` points to the demo's Nx Cloud staging workspace; local checks need no CI token. To generate all 21,093 tests, run `node scripts/generate-fixture.ts --preset full`; this replaces `packages/`, so do it in a disposable checkout. Generate `--preset smoke` there to restore the smoke fixture.
 
 ## 1. The problem
 
@@ -65,7 +65,9 @@ Each `test-ci--kk` target runs `jest -c jest.config.js --shard=k/shardCount --ru
 
 ### Imports resolve the way each project's Jest config resolves them
 
-The plugin has no alias option. It loads every `jest.config.*` with Jest's own loader and resolves each import with that project's Jest resolver, so `moduleNameMapper`, `<rootDir>`, module directories and package export conditions apply exactly as they do when the test runs. One shared file imported by two projects can therefore have two closures. An import Jest cannot resolve fails the graph with the config, the importer and the specifier.
+The plugin has no alias option. It loads every `jest.config.*` with Jest's own loader and resolves each import with that project's Jest resolver, so `moduleNameMapper`, `<rootDir>`, module directories and package export conditions apply exactly as they do when the test runs. One shared file imported by two projects can therefore have two closures. An import Jest cannot resolve fails the graph with the config, the importer and the specifier. So does a gitignored file, whether a test imports it or the config loads it, because Nx cannot hash it.
+
+Each graph build evaluates a config once and starts from empty resolver caches, so a long-lived graph process sees a changed manifest or a newly created file. The files Node loads itself (the config, its preset, transformers) can reach a package that exports different files to `import` and `require`; both are inputs.
 
 `fixtures/mappers` is a small workspace of its own with three projects and seventeen resolution cases: one specifier mapped differently by three configs, overlapping patterns in both orders, capture groups, a replacement array, replacements that name a linked workspace package and a third-party package, a mapped mock with a nested import, a `rootDir` below the project root, `modulePaths`, export conditions, and a package whose `main` is an absent, gitignored build output. `fixtures/mappers/cases.json` records the file each case must resolve to. `pnpm mappers` copies the fixture to a throwaway workspace and checks, with real Nx and Jest:
 
@@ -74,7 +76,7 @@ The plugin has no alias option. It loads every `jest.config.*` with Jest's own l
 - editing each resolved file makes exactly the dependent shards miss the cache;
 - changing only a mapper in a Jest config changes the closure;
 - cold and warm graph builds produce the same targets;
-- seven broken variants (an unmapped package with a missing `main`, the same with a gitignored build present, an unresolvable specifier, a mapper to missing files, a missing relative file, a missing shared file, a `rootDir` outside the project) fail graph construction and name the cause.
+- eight broken variants (an unmapped package with a missing `main`, the same with a gitignored build present, a gitignored setup file that nothing imports, an unresolvable specifier, a mapper to missing files, a missing relative file, a missing shared file, a `rootDir` outside the project) fail graph construction and name the cause.
 
 ## 3. Membership equals Jest
 
