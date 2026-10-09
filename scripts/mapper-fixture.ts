@@ -49,7 +49,7 @@ for (const name of readdirSync(join(ws, 'pkgs'))) {
   symlinkSync(join('../../pkgs', name), join(ws, 'node_modules/@acme', name));
 }
 
-const env = {
+const env: NodeJS.ProcessEnv = {
   ...process.env,
   NX_DAEMON: 'false',
   NX_LEGACY_AFFECTED: 'false',
