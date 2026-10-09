@@ -57,6 +57,10 @@ const env = {
   NX_CACHE_DIRECTORY: join(ws, '.nx/cache'),
   NX_WORKSPACE_DATA_DIRECTORY: join(ws, '.nx/workspace-data'),
 };
+// On a CI runner Nx groups its log lines, and the cache-miss parser below
+// reads the plain terminal format.
+delete env.CI;
+delete env.GITHUB_ACTIONS;
 const WS = '{workspaceRoot}/';
 
 function exec(cmd: string, args: string[]) {
