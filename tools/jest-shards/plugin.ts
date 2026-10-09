@@ -9,7 +9,7 @@ import { Minimatch } from 'minimatch';
 import { existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { normalizeOptions, planShards, type ShardOptions } from './buckets.ts';
-import { importClosures } from './closures.ts';
+import { importClosures, type ClosureMeasurements } from './closures.ts';
 
 const WS = '{workspaceRoot}/';
 const FILE_TARGET = 'jest-file--';
@@ -27,88 +27,142 @@ interface JestProject {
  * members plus their import closures, so an edit only reaches the shards whose
  * tests can observe it.
  */
-export const createNodes: CreateNodes<Partial<ShardOptions>> = [
-  stockJest[0],
-  async (configFiles, rawOptions, context) => {
-    const options = normalizeOptions(rawOptions);
-    const projects = await discover(configFiles, context);
-    const testFiles = projects.flatMap((p) => p.tests.map((t) => join(p.root, t)));
-    checkDiscovery(testFiles, options.isolate);
+export const createNodes: CreateNodes<Partial<ShardOptions>> = [stockJest[0], inferShards];
 
-    const sharedFiles = options.sharedInputs.flatMap((input) =>
-      typeof input === 'string' && /^\{workspaceRoot\}\/[^*?[\]{}!]+\.[cm]?[jt]sx?$/.test(input)
-        ? [input.slice(WS.length)]
-        : [],
-    );
-    const closures = await importClosures(
-      context.workspaceRoot,
-      [...testFiles, ...sharedFiles],
-      options.resolve,
-    );
-    const tests = new Set(testFiles);
-    for (const test of testFiles) {
-      const imported = [...closures.get(test)!].find((file) => tests.has(file));
-      if (imported) throw new Error(`jest-shards: ${test} imports the test ${imported}`);
+export interface ShardMeasurement {
+  root: string;
+  name: string;
+  members: string[];
+  beforeShared: string[];
+  afterShared: string[];
+  patterns: string[];
+  stage: 'exact' | 'directory globs' | 'roots';
+  cap: number;
+  inferenceMs: number;
+}
+
+export interface InferenceMeasurements {
+  discoveryMs: number;
+  closures: ClosureMeasurements;
+  shards: ShardMeasurement[];
+  /** Diagnostics suppress path-bearing cap warnings. */
+  uncapped?: boolean;
+}
+
+/** Shared by Nx inference and the local diagnostic, with no task execution. */
+export async function inferShards(
+  configFiles: readonly string[],
+  rawOptions: Partial<ShardOptions> | undefined,
+  context: CreateNodesContext,
+  measurements?: InferenceMeasurements,
+) {
+  const discoveryStarted = performance.now();
+  const options = normalizeOptions(rawOptions);
+  const projects = await discover(configFiles, context);
+  if (measurements) measurements.discoveryMs = performance.now() - discoveryStarted;
+  const testFiles = projects.flatMap((p) => p.tests.map((t) => join(p.root, t)));
+  checkDiscovery(testFiles, options.isolate);
+
+  const sharedFiles = options.sharedInputs.flatMap((input) =>
+    typeof input === 'string' && /^\{workspaceRoot\}\/[^*?[\]{}!]+\.[cm]?[jt]sx?$/.test(input)
+      ? [input.slice(WS.length)]
+      : [],
+  );
+  const closures = await importClosures(
+    context.workspaceRoot,
+    [...testFiles, ...sharedFiles],
+    options.resolve,
+    measurements?.closures,
+  );
+  const tests = new Set(testFiles);
+  for (const test of testFiles) {
+    const imported = [...closures.get(test)!].find((file) => tests.has(file));
+    if (imported) throw new Error(`jest-shards: ${test} imports the test ${imported}`);
+  }
+
+  // Jest loads setup files, the preset and transformers without any test
+  // importing them, so their own imports go to every shard.
+  const shared = new Set(sharedFiles.flatMap((file) => [file, ...closures.get(file)!]));
+  const sharedInputs = [
+    ...options.sharedInputs,
+    ...[...shared]
+      .filter((file) => !sharedFiles.includes(file))
+      .sort()
+      .map(exact),
+  ];
+
+  return projects.map(({ configFile, root, tests }) => {
+    const plan = planShards(root, tests, options);
+    const width = Math.max(2, String(plan.shardCount).length);
+    const members = new Map<number, string[]>();
+    for (const [test, shard] of plan.shardOf) {
+      members.set(shard, [...(members.get(shard) ?? []), join(root, test)]);
     }
 
-    // Jest loads setup files, the preset and transformers without any test
-    // importing them, so their own imports go to every shard.
-    const shared = new Set(sharedFiles.flatMap((file) => [file, ...closures.get(file)!]));
-    const sharedInputs = [
-      ...options.sharedInputs,
-      ...[...shared]
-        .filter((file) => !sharedFiles.includes(file))
-        .sort()
-        .map(exact),
-    ];
-
-    return projects.map(({ configFile, root, tests }) => {
-      const plan = planShards(root, tests, options);
-      const width = Math.max(2, String(plan.shardCount).length);
-      const members = new Map<number, string[]>();
-      for (const [test, shard] of plan.shardOf) {
-        members.set(shard, [...(members.get(shard) ?? []), join(root, test)]);
-      }
-
-      const targets: Record<string, TargetConfiguration> = {};
-      for (const shard of [...members.keys()].sort((a, b) => a - b)) {
-        const name = `test-ci--${String(shard).padStart(width, '0')}`;
-        const files = members.get(shard)!;
-        const source = new Set<string>();
-        for (const file of files) {
-          for (const dep of closures.get(file)!) if (!shared.has(dep)) source.add(dep);
+    const targets: Record<string, TargetConfiguration> = {};
+    for (const shard of [...members.keys()].sort((a, b) => a - b)) {
+      const name = `test-ci--${String(shard).padStart(width, '0')}`;
+      const files = members.get(shard)!;
+      const inferenceStarted = performance.now();
+      const beforeShared = new Set<string>();
+      const source = new Set<string>();
+      for (const file of files) {
+        for (const dep of closures.get(file)!) {
+          if (measurements) beforeShared.add(dep);
+          if (!shared.has(dep)) source.add(dep);
         }
-        targets[name] = {
-          executor: 'nx:run-commands',
-          cache: true,
-          inputs: [
-            ...files.map(exact),
-            ...files.map((f) => exact(`${dirname(f)}/__snapshots__/${basename(f)}.snap`)),
-            exact(configFile),
-            exact(join(root, 'package.json')),
-            ...sharedInputs,
-            ...capClosure(context.workspaceRoot, [...source].sort(), options, `${root}:${name}`),
-          ],
-          outputs: [],
-          options: {
-            // Constant per shard: membership lives only in `inputs`, so adding a
-            // test changes one shard's hash and leaves the project config alone.
-            command:
-              `jest -c ${basename(configFile)} --shard=${shard}/${plan.shardCount}` +
-              ' --runInBand --coverage=false --watch=false',
-            cwd: root,
-            forwardAllArgs: false,
-          },
-          metadata: {
-            technologies: ['jest'],
-            description: `Jest shard ${shard} of ${plan.shardCount} (stable hash buckets)`,
-          },
-        };
       }
-      return [configFile, { projects: { [root]: { targets } } }] as const;
-    });
-  },
-];
+      const cap = measurements?.uncapped
+        ? Infinity
+        : (options.overrides[root]?.maxClosureInputs ?? options.maxClosureInputs);
+      const capped = capClosure(
+        context.workspaceRoot,
+        [...source].sort(),
+        cap,
+        `${root}:${name}`,
+        !!measurements,
+      );
+      measurements?.shards.push({
+        root,
+        name,
+        members: files,
+        beforeShared: [...beforeShared].sort(),
+        afterShared: [...source].sort(),
+        patterns: capped.patterns,
+        stage: capped.stage,
+        cap,
+        inferenceMs: performance.now() - inferenceStarted,
+      });
+      targets[name] = {
+        executor: 'nx:run-commands',
+        cache: true,
+        inputs: [
+          ...files.map(exact),
+          ...files.map((f) => exact(`${dirname(f)}/__snapshots__/${basename(f)}.snap`)),
+          exact(configFile),
+          exact(join(root, 'package.json')),
+          ...sharedInputs,
+          ...capped.patterns,
+        ],
+        outputs: [],
+        options: {
+          // Constant per shard: membership lives only in `inputs`, so adding a
+          // test changes one shard's hash and leaves the project config alone.
+          command:
+            `jest -c ${basename(configFile)} --shard=${shard}/${plan.shardCount}` +
+            ' --runInBand --coverage=false --watch=false',
+          cwd: root,
+          forwardAllArgs: false,
+        },
+        metadata: {
+          technologies: ['jest'],
+          description: `Jest shard ${shard} of ${plan.shardCount} (stable hash buckets)`,
+        },
+      };
+    }
+    return [configFile, { projects: { [root]: { targets } } }] as const;
+  });
+}
 
 /** Test discovery is the stock @nx/jest fast matcher, read from its per-file target names. */
 async function discover(
@@ -149,24 +203,30 @@ function checkDiscovery(testFiles: string[], isolate: string[]) {
  * directory globs, then to project-root globs. Every stage is a superset of
  * the exact list, and the assertion below checks that.
  */
-function capClosure(
+export function capClosure(
   workspaceRoot: string,
   files: string[],
-  { maxClosureInputs: max }: ShardOptions,
+  max: number,
   label: string,
-): string[] {
+  quiet = false,
+): { patterns: string[]; stage: ShardMeasurement['stage'] } {
+  let stage: ShardMeasurement['stage'] = 'exact';
   let patterns = files.map(exact);
   if (patterns.length > max) {
+    stage = 'directory globs';
     patterns = unique(files.map((f) => WS + globUnder(dirname(f), '*', f)));
-    logger.warn(
-      `jest-shards: ${label} closure of ${files.length} files exceeds maxClosureInputs ${max}; using ${patterns.length} directory globs`,
-    );
+    if (!quiet)
+      logger.warn(
+        `jest-shards: ${label} closure of ${files.length} files exceeds maxClosureInputs ${max}; using ${patterns.length} directory globs`,
+      );
   }
   if (patterns.length > max) {
+    stage = 'roots';
     patterns = unique(files.map((f) => WS + globUnder(ownerDir(workspaceRoot, f), '**/*', f)));
-    logger.warn(
-      `jest-shards: ${label} still exceeds maxClosureInputs ${max}; using ${patterns.length} project-root globs`,
-    );
+    if (!quiet)
+      logger.warn(
+        `jest-shards: ${label} still exceeds maxClosureInputs ${max}; using ${patterns.length} project-root globs`,
+      );
   }
   // Plain paths match themselves; only globs and escaped paths need a matcher.
   const globs = patterns.map((p) => p.slice(WS.length));
@@ -174,7 +234,7 @@ function capClosure(
   const matchers = globs.filter((p) => !plain.has(p)).map((p) => new Minimatch(p, { dot: true }));
   const uncovered = files.find((f) => !plain.has(f) && !matchers.some((m) => m.match(f)));
   if (uncovered) throw new Error(`jest-shards: ${label} inputs do not cover ${uncovered}`);
-  return patterns;
+  return { patterns, stage };
 }
 
 /** The nearest enclosing project root, or else the file's top-level directory. */

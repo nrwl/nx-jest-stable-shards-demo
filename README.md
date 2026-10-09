@@ -252,3 +252,47 @@ node scripts/parity.ts
 SHARD_TARGETS=$(node scripts/shard-targets.ts)
 pnpm exec nx run-many -t "$SHARD_TARGETS"
 ```
+
+## Local closure diagnostics
+
+`pnpm analyze` constructs the plugin's discovery, import graph and shard inputs without running tests, using Nx Cloud or uploading data. It uses the same discovery, traversal, shared-file removal and cap functions as target inference. Version 1 JSON is counts only, with opaque ordinal project and shard IDs. Review the JSON before choosing to share it. `--raw` adds local paths, members, targets and patterns and exposes detailed errors; keep that output local. The command loads your local Jest configs, just as inference does.
+
+```sh
+pnpm analyze --cap 1000 > .nx/closure-1000.json
+pnpm analyze --cap 5000 > .nx/closure-5000.json
+pnpm analyze --cap uncapped > .nx/closure-exact.json
+```
+
+With no `--cap`, the command uses the configured budgets. A numeric comparison cap overrides every per-project budget, and `uncapped` emits exact paths regardless of budgets. The plugin default remains 1000. Set an explicit budget in `nx.json`, for example `"overrides": { "packages/example": { "maxClosureInputs": 5000 } }`. This can be combined with `testsPerShard` or used alone; it does not change membership or bucket sizing. Zero remains a valid soft budget. Root patterns can still exceed the budget; files are never truncated.
+
+Generate the independent synthetic deep-hub fixture, without changing the committed smoke fixture:
+
+```sh
+pnpm fixture:deep-hub
+pnpm analyze --workspace .nx/deep-hub --cap 1000 > .nx/deep-1000.json
+pnpm analyze --workspace .nx/deep-hub --cap 5000 > .nx/deep-5000.json
+pnpm analyze --workspace .nx/deep-hub --cap uncapped > .nx/deep-exact.json
+```
+
+It has three project roots (one nested), 24 tests and six shards. Many tests import a 1,100-module cycle and a 1,200-file hub. At 1000 it produces exact, directory and root stages; at 5000 and uncapped all six shards are exact. These are synthetic measurements and say nothing about a customer's cache hit rate.
+
+| Number                     | Meaning                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `memberCount`              | Member tests in a shard, or in all shards of a project.                                                                                                                                                                                                                                                                                                                               |
+| `exactClosureBeforeShared` | Distinct imported workspace files, excluding each traversal root, before removing shared files.                                                                                                                                                                                                                                                                                       |
+| `exactClosureAfterShared`  | Distinct imported files after the exact shared-input closures have been removed. This is what the budget applies to.                                                                                                                                                                                                                                                                  |
+| `stage`, `stages`          | Exact paths, immediate directory globs, or enclosing project/package root globs. Project rows give stage counts.                                                                                                                                                                                                                                                                      |
+| `outputPatternCount`       | Source-closure patterns only. Mandatory member, snapshot, config and shared inputs are outside this count and the cap. Project counts deduplicate patterns.                                                                                                                                                                                                                           |
+| `coveredFileCount`         | Existing workspace files matched by source-closure patterns, including siblings and nested roots reached by widening. Excludes `.nx`, `.git`, `.paperclip` and `node_modules`.                                                                                                                                                                                                        |
+| `extraCoveredFiles`        | Covered files minus the exact post-shared closure. Project values use unions, not sums. This measures extra input selection breadth, not a cache hit rate.                                                                                                                                                                                                                            |
+| `hubFanIn`                 | Maximum number of distinct importing modules for any file in the pre-shared closure, in the discovered graph. This is direct fan-in, not transitive test reachability.                                                                                                                                                                                                                |
+| `unresolvedCount`          | Unresolved dependency records in members and their pre-shared closure. Unresolved workspace imports or missing roots fail the command, including exact mode. Unresolved external specifiers can be counted.                                                                                                                                                                           |
+| `unsupportedCount`         | Reachable local modules that the cruiser reports as not followable, excluding JSON, builtins, external and unresolved modules. It counts observed opaque modules, not invisible computed imports or runtime file reads. Zero does not establish that every runtime dependency is modeled.                                                                                             |
+| `timingsMs`                | Discovery (stock matcher), resolution (cruise and edge construction), traversal, source-input inference, coverage scan and total. Discovery, resolution and traversal are shared graph costs repeated on project/shard rows, never allocated estimates. Inference is measured for each shard and summed per project. Total includes report construction but excludes process startup. |
+| `peakRssBytes`             | Process peak resident memory, including discovery and the analyzer. Repeated row values are the process watermark, not per-shard allocations.                                                                                                                                                                                                                                         |
+
+The summary gives each stage's count and share and nearest-rank p50, p95 and maximum closure size (before and after shared removal) and extra covered files. IDs are stable within the same config and membership checkout; they are not a mapping to share separately. No paths, project names, package names or specifiers are included by default, including failure messages.
+
+Caches stay local: dependency-cruiser writes `<analyzed workspace>/.nx/depcruise`; stock Nx discovery writes the invoking workspace's `.nx/workspace-data` (or `NX_WORKSPACE_DATA_DIRECTORY` if explicitly set). The fixture and suggested reports live under `.nx`, which is ignored. These caches contain paths and dependency data and should not be sent back. A cold run removes these disposable cache directories; a warm run repeats the command in a new process with unchanged files. For a local-change case, edit a source file, rerun, then restore the edit. Do not regenerate the fixture between warm runs.
+
+Send only the default JSON reports for the three caps, labeled cold, warm or local-change, with Node/Nx/Jest versions and whether these were synthetic or your own repository. Include the summary and per-project/per-shard counts if you choose. Keep `--raw` output and caches local. These numbers report widening and its costs; they do not select a new default cap or measure Nx affected task inflation or cache hits.

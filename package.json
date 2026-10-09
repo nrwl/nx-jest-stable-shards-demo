@@ -9,11 +9,13 @@
     "typecheck": "tsc -p tsconfig.json",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test:unit": "node --test tools/jest-shards/plugin.test.ts",
+    "test:unit": "node --test tools/jest-shards/*.test.ts",
     "fixture": "node scripts/generate-fixture.ts",
     "shard-targets": "node scripts/shard-targets.ts",
     "parity": "node scripts/parity.ts",
-    "acceptance": "node scripts/acceptance.ts"
+    "acceptance": "node scripts/acceptance.ts",
+    "analyze": "NX_DAEMON=false NX_SKIP_NX_CACHE=true NX_NO_CLOUD=true node tools/jest-shards/analyze.ts",
+    "fixture:deep-hub": "node scripts/generate-deep-hub.ts"
   },
   "devDependencies": {
     "@jest/test-sequencer": "29.7.0",

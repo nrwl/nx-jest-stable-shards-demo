@@ -4,6 +4,14 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ShardOptions } from './buckets.ts';
 
+export interface ClosureMeasurements {
+  resolutionMs: number;
+  traversalMs: number;
+  fanIn: Map<string, number>;
+  unresolved: Map<string, number>;
+  unsupported: Set<string>;
+}
+
 /**
  * Runs dependency-cruiser once over `roots` (workspace-relative files) and
  * returns each root's transitive import closure, excluding the root itself.
@@ -14,7 +22,14 @@ export async function importClosures(
   workspaceRoot: string,
   roots: string[],
   resolve: ShardOptions['resolve'],
+  measurements?: ClosureMeasurements,
 ): Promise<Map<string, Set<string>>> {
+  const started = performance.now();
+  for (const root of roots) {
+    if (!existsSync(join(workspaceRoot, root))) {
+      throw new Error(`jest-shards: unresolved closure root ${root}`);
+    }
+  }
   const alias = Object.fromEntries(
     Object.entries(resolve.alias ?? {}).map(([key, target]) => [key, join(workspaceRoot, target)]),
   );
@@ -62,6 +77,24 @@ export async function importClosures(
       }
     }
     edges.set(module.source, followed);
+    if (measurements) {
+      measurements.unresolved.set(
+        module.source,
+        module.dependencies.filter((d) => d.couldNotResolve).length,
+      );
+      if (
+        module.followable === false &&
+        !module.coreModule &&
+        !module.couldNotResolve &&
+        !module.source.includes('node_modules/') &&
+        !module.source.endsWith('.json')
+      ) {
+        measurements.unsupported.add(module.source);
+      }
+      for (const dep of new Set(followed)) {
+        measurements.fanIn.set(dep, (measurements.fanIn.get(dep) ?? 0) + 1);
+      }
+    }
   }
   if (unresolved.length > 0) {
     throw new Error(
@@ -71,6 +104,11 @@ export async function importClosures(
     );
   }
 
+  for (const root of roots) {
+    if (!edges.has(root)) throw new Error(`jest-shards: unresolved closure root ${root}`);
+  }
+  const traversalStarted = performance.now();
+  if (measurements) measurements.resolutionMs = traversalStarted - started;
   const closures = new Map<string, Set<string>>();
   for (const root of roots) {
     const seen = new Set<string>([root]);
@@ -85,5 +123,6 @@ export async function importClosures(
     seen.delete(root);
     closures.set(root, seen);
   }
+  if (measurements) measurements.traversalMs = performance.now() - traversalStarted;
   return closures;
 }

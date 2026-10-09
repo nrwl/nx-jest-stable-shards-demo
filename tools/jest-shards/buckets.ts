@@ -5,8 +5,8 @@ import { join } from 'node:path';
 export interface ShardOptions {
   /** Target maximum average of regular (non-isolated) tests per hash bucket. */
   testsPerShard: number;
-  /** Per-project `testsPerShard`, keyed by project root. */
-  overrides: Record<string, { testsPerShard: number }>;
+  /** Per-project sizing and closure budget, keyed by project root. */
+  overrides: Record<string, { testsPerShard?: number; maxClosureInputs?: number }>;
   /** Workspace-relative test paths that each get a shard of their own. */
   isolate: string[];
   /** Inputs every shard gets; exact JS/TS files among them are cruised too. */
@@ -34,20 +34,24 @@ export function normalizeOptions(raw: Partial<ShardOptions> = {}): ShardOptions 
   // A non-positive or non-finite size would never let bucketCount settle.
   const sizes: [string, number][] = [
     ['testsPerShard', options.testsPerShard],
-    ...Object.entries(options.overrides).map(([root, o]): [string, number] => [
-      `overrides.${root}.testsPerShard`,
-      o.testsPerShard,
-    ]),
+    ...Object.entries(options.overrides)
+      .filter(([, o]) => o.testsPerShard !== undefined)
+      .map(([root, o]): [string, number] => [`overrides.${root}.testsPerShard`, o.testsPerShard!]),
   ];
   for (const [name, value] of sizes) {
     if (!(Number.isFinite(value) && value > 0)) {
       throw new Error(`jest-shards: ${name} must be a positive number, got ${value}`);
     }
   }
-  if (!(Number.isInteger(options.maxClosureInputs) && options.maxClosureInputs >= 0)) {
-    throw new Error(
-      `jest-shards: maxClosureInputs must be a nonnegative integer, got ${options.maxClosureInputs}`,
-    );
+  for (const [name, cap] of [
+    ['maxClosureInputs', options.maxClosureInputs],
+    ...Object.entries(options.overrides)
+      .filter(([, o]) => o.maxClosureInputs !== undefined)
+      .map(([root, o]) => [`overrides.${root}.maxClosureInputs`, o.maxClosureInputs!]),
+  ] as [string, number][]) {
+    if (!(Number.isInteger(cap) && cap >= 0)) {
+      throw new Error(`jest-shards: ${name} must be a nonnegative integer, got ${cap}`);
+    }
   }
   return options;
 }
