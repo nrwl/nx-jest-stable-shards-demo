@@ -19,9 +19,7 @@ import { normalizeOptions, planShards } from './buckets.ts';
 process.env.NX_DAEMON = 'false';
 const { analyze } = await import('./analyze.ts');
 const { importClosures } = await import('./closures.ts');
-const root = mkdtempSync(
-  join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), 'closure-diagnostics-'),
-);
+const root = mkdtempSync(join(tmpdir(), 'closure-diagnostics-'));
 generateDeepHub(root);
 after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -108,7 +106,10 @@ test('project cap override does not change bucket sizing, and comparison cap ove
 });
 
 test('missing exact roots and unresolved imports are errors', async () => {
-  await assert.rejects(importClosures(root, ['missing.test.js'], {}), /unresolved closure root/);
+  await assert.rejects(
+    importClosures(root, ['missing.test.js'], {}),
+    /missing.test.js.*graph-entrypoint/,
+  );
   const missing = join(root, 'packages/small/tests/case-0.test.js');
   const original = readFileSync(missing, 'utf8');
   writeFileSync(missing, "require('./missing');\n");
@@ -223,9 +224,7 @@ test('CLI output is private, executes no Jest, performs no network IO, and chang
 });
 
 test('unresolved external and observed unsupported module counts come from the actual graph', async () => {
-  const countsRoot = mkdtempSync(
-    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), 'closure-counts-'),
-  );
+  const countsRoot = mkdtempSync(join(tmpdir(), 'closure-counts-'));
   try {
     mkdirSync(join(countsRoot, 'app'));
     writeFileSync(

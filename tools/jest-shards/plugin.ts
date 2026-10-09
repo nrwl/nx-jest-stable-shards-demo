@@ -72,6 +72,12 @@ export async function inferShards(
     context.workspaceRoot,
     [...testFiles, ...sharedFiles],
     options.resolve,
+    new Map([
+      ...projects.flatMap((p) =>
+        p.tests.map((t) => [join(p.root, t), `${p.root} (${p.configFile})`] as [string, string]),
+      ),
+      ...sharedFiles.map((file) => [file, `shared input ${file}`] as [string, string]),
+    ]),
     measurements?.closures,
   );
   const tests = new Set(testFiles);
