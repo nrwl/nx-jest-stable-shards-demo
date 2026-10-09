@@ -25,7 +25,7 @@ test -n "$SHARD_TARGETS"
 pnpm exec nx run-many -t "$SHARD_TARGETS" --parallel=3
 ```
 
-Expect `PARITY OK`, `46/46 rows pass` from the mapper fixture and 64 successful tasks. `nx.json` points to the demo's Nx Cloud staging workspace; local checks need no CI token. To generate all 21,093 tests, run `node scripts/generate-fixture.ts --preset full`; this replaces `packages/`, so do it in a disposable checkout. Generate `--preset smoke` there to restore the smoke fixture.
+Expect `PARITY OK`, `50/50 rows pass` from the mapper fixture and 64 successful tasks. `nx.json` points to the demo's Nx Cloud staging workspace; local checks need no CI token. To generate all 21,093 tests, run `node scripts/generate-fixture.ts --preset full`; this replaces `packages/`, so do it in a disposable checkout. Generate `--preset smoke` there to restore the smoke fixture.
 
 ## 1. The problem
 
