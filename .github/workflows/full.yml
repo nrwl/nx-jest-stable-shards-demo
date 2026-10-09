@@ -1,16 +1,25 @@
-# The full simulation: every recorded test, 30 agents times --parallel=3, either
+# The full simulation: every recorded test at 0.2 scale, 30 agents times --parallel=2, either
 # as stock per-file tasks or as stable shards. One run-many per execution; the
-# warm case is a rerun of the same mode at the same SHA. Label a run cold only
+# warm case reuses the same mode, cache key and SHA. Label a run cold only
 # if its main log shows zero remote cache hits.
 name: full
+run-name: full / ${{ inputs.mode }} / daemon=${{ inputs.daemon }} / cache=${{ inputs.cache_key || 'default' }}
 
 on:
   workflow_dispatch:
     inputs:
       mode:
         type: choice
-        options: [per-file, sharded]
+        options: [per-file, sharded, daemon-probe]
         required: true
+      daemon:
+        description: Enable the daemon on the full run's coordinator
+        type: boolean
+        default: false
+      cache_key:
+        description: Sharded task cache key (change for cold, reuse for warm)
+        type: string
+        default: ''
 
 concurrency:
   group: full
@@ -18,12 +27,38 @@ concurrency:
 env:
   NX_CLOUD_ACCESS_TOKEN: ${{ secrets.NX_CLOUD_ACCESS_TOKEN }}
   NX_LEGACY_AFFECTED: false
-  FIXTURE_WORK_SCALE: '1'
+  NX_CLOUD_CONTINUOUS_ASSIGNMENT: 'true'
+  FIXTURE_WORK_SCALE: '0.2'
+  FIXTURE_CACHE_KEY: ${{ inputs.cache_key }}
 
 jobs:
-  main:
+  daemon-probe:
+    if: inputs.mode == 'daemon-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 10
+    env:
+      NX_NO_CLOUD: 'true'
+      NX_CLOUD_ACCESS_TOKEN: ''
+      FIXTURE_WORK_SCALE: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.8.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Compare daemon graph reuse without running tests
+        run: node scripts/benchmark-ci-daemon.mjs
+
+  main:
+    if: inputs.mode == 'sharded' || inputs.mode == 'per-file'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NX_DAEMON: ${{ inputs.daemon && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -54,14 +89,18 @@ jobs:
           echo "TARGETS=$TARGETS" >> "$GITHUB_ENV"
       - run: pnpm exec nx start-ci-run --distribute-on=manual --stop-agents-after="$TARGETS"
       - name: Run all tests
+        timeout-minutes: 20
         run: |
           set -o pipefail
-          pnpm exec nx run-many -t "$TARGETS" --parallel=3 | tee nx-output.txt
+          pnpm exec nx run-many -t "$TARGETS" --parallel=2 | tee nx-output.txt
       # Releases the agents even when the task step failed or never ran; its own
       # result cannot turn a failed task step green.
       - name: Complete CI run
         if: always()
         run: pnpm exec nx complete-ci-run
+      - name: Stop coordinator daemon
+        if: always() && inputs.daemon
+        run: pnpm exec nx reset --onlyDaemon
       - name: Summary
         if: always()
         run: |
@@ -69,8 +108,9 @@ jobs:
           grep -E 'Successfully ran|Ran target|tasks? failed|Cache:|remote cache|Successful Tasks|Failed Tasks|Cached Tasks|Total Executed Tasks' nx-output.txt || true
 
   agents:
+    if: inputs.mode == 'sharded' || inputs.mode == 'per-file'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 25
     strategy:
       matrix:
         agent:
