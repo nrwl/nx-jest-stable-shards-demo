@@ -118,7 +118,7 @@ function graphFails(parts: string[]): string {
 }
 function reset() {
   git(['reset', '-q', '--hard']);
-  git(['clean', '-fdq', '--', 'apps', 'pkgs', 'shared']);
+  git(['clean', '-fdq', '--', 'apps', 'pkgs', 'shared', '.nxignore']);
 }
 function edit(file: string, from: string | RegExp, to: string) {
   const before = readFileSync(join(ws, file), 'utf8');
@@ -267,7 +267,17 @@ attempt(
   },
 );
 
-// 6. Nothing unresolved is dropped: each of these must fail graph construction.
+// 6. Nothing the workspace owns is dropped, and nothing Nx does not hash is
+// an input: each of these must fail graph construction, so no cached result
+// exists to go stale.
+function loadSetup() {
+  edit(
+    'apps/alpha/jest.config.js',
+    "displayName: 'alpha',",
+    "displayName: 'alpha',\n  setupFiles: ['<rootDir>/../../shared/local-setup.js'],",
+  );
+  writeFileSync(join(ws, 'shared/local-setup.js'), 'global.fromSetup = 1;\n');
+}
 const failing: [string, string[], () => void][] = [
   [
     'Remove the mapper for `@acme/built`, whose `main` (`lib/index.js`) is absent',
@@ -276,7 +286,7 @@ const failing: [string, string[], () => void][] = [
   ],
   [
     'Remove that mapper with `lib/index.js` built locally (gitignored)',
-    ['pkgs/built/lib/index.js', 'ignored by git'],
+    ['pkgs/built/lib/index.js', 'Nx does not hash it'],
     () => {
       edit('apps/alpha/jest.config.js', /\n.*'\^@acme\/built\$'.*\n/, '\n');
       mkdirSync(join(ws, 'pkgs/built/lib'));
@@ -285,7 +295,7 @@ const failing: [string, string[], () => void][] = [
   ],
   [
     'Add a gitignored setup file with no imports',
-    ['pkgs/built/lib/setup.js', 'ignored by git'],
+    ['pkgs/built/lib/setup.js', 'Nx does not hash it'],
     () => {
       edit(
         'apps/alpha/jest.config.js',
@@ -297,8 +307,26 @@ const failing: [string, string[], () => void][] = [
     },
   ],
   [
+    'Load a setup file that `.nxignore` excludes',
+    ['shared/local-setup.js', 'Nx does not hash it'],
+    () => {
+      loadSetup();
+      writeFileSync(join(ws, '.nxignore'), 'shared/local-setup.js\n');
+    },
+  ],
+  [
+    'Load a setup file Git tracks and `.gitignore` matches',
+    ['shared/local-setup.js', 'Nx does not hash it'],
+    () => {
+      loadSetup();
+      git(['add', 'shared/local-setup.js']);
+      appendFileSync(join(ws, '.gitignore'), 'shared/local-setup.js\n');
+      if (!git(['ls-files', 'shared/local-setup.js']).trim()) throw new Error('not tracked');
+    },
+  ],
+  [
     'Import a specifier no config maps, from the shared importer',
-    ['apps/alpha/jest.config.js', 'shared/uses-flavor.js', "'@acme/nowhere'"],
+    ['apps/alpha/jest.config.js', 'shared/uses-flavor.js', "'@acme/nowhere'", 'workspace-scope'],
     () => appendFileSync(join(ws, 'shared/uses-flavor.js'), "require('@acme/nowhere');\n"),
   ],
   [
@@ -313,7 +341,7 @@ const failing: [string, string[], () => void][] = [
   ],
   [
     'Declare a shared input file that does not exist',
-    ['sharedInputs', 'tools/gone.js', 'cannot be read'],
+    ['shared input tools/gone.js', 'graph-entrypoint'],
     () =>
       edit('nx.json', '"sharedInputs": [', '"sharedInputs": ["{workspaceRoot}/tools/gone.js", '),
   ],

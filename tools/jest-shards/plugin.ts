@@ -11,6 +11,7 @@ import { basename, dirname, join, relative } from 'node:path';
 import { normalizeOptions, planShards, projectRootOf, type ShardOptions } from './buckets.ts';
 import { importClosures } from './closures.ts';
 import { JestProjects, type JestProject } from './jest-context.ts';
+import { hashableFiles, workspaceOwnership } from './ownership.ts';
 
 const WS = '{workspaceRoot}/';
 const FILE_TARGET = 'jest-file--';
@@ -49,20 +50,37 @@ export const createNodes: CreateNodes<Partial<ShardOptions>> = [
         ? [input.slice(WS.length)]
         : [],
     );
-    const closureOf = await importClosures(context.workspaceRoot, [
-      ...sharedFiles.map((file) => ({ file, context: jest.node, config: 'sharedInputs' })),
-      ...projects.flatMap(({ configFile, root, tests }) => {
-        const { context, nodeLoaded, jestLoaded } = loaded.get(configFile)!;
-        return [
-          ...nodeLoaded.map((file) => ({ file, context: jest.node, config: configFile })),
-          ...[...jestLoaded, ...tests.map((t) => join(root, t))].map((file) => ({
-            file,
-            context,
-            config: configFile,
-          })),
-        ];
-      }),
-    ]);
+    const hashable = await hashableFiles(context.workspaceRoot);
+    const { closureOf, external } = await importClosures(
+      context.workspaceRoot,
+      [
+        ...sharedFiles.map((file) => ({
+          file,
+          context: jest.node,
+          config: `shared input ${file}`,
+        })),
+        ...projects.flatMap(({ configFile, root, tests }) => {
+          const { context, nodeLoaded, jestLoaded } = loaded.get(configFile)!;
+          const config = `${root} (${configFile})`;
+          return [
+            ...nodeLoaded.map((file) => ({ file, context: jest.node, config })),
+            ...[...jestLoaded, ...tests.map((t) => join(root, t))].map((file) => ({
+              file,
+              context,
+              config,
+            })),
+          ];
+        }),
+      ],
+      { hashable, ownership: workspaceOwnership(context.workspaceRoot, hashable) },
+    );
+    if (external.length > 0) {
+      logger.warn(
+        `jest-shards: Jest cannot resolve ${external.length} imports of names no workspace ` +
+          `package, scope or mapper claims; they are not inputs: ${external.slice(0, 5).join(', ')}` +
+          (external.length > 5 ? ', ...' : ''),
+      );
+    }
     const allTests = new Set(testFiles);
 
     // Declared shared files are loaded outside any test's imports, so their

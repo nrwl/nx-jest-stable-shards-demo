@@ -1,6 +1,6 @@
 import type { CreateNodesContext, TargetConfiguration } from '@nx/devkit';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
@@ -13,9 +13,11 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, describe, test } from 'node:test';
+import { resetWorkspaceContext } from 'nx/src/devkit-internals.js';
 import { normalizeOptions, planShards, type ShardOptions } from './buckets.ts';
 import { JestProjects } from './jest-context.ts';
 import { createNodes } from './plugin.ts';
+import { classifyWorkspaceImport, hashableFiles, workspaceOwnership } from './ownership.ts';
 import StableShardSequencer from './sequencer.ts';
 
 process.env.NX_DAEMON = 'false'; // the daemon's glob ignores these throwaway workspace roots
@@ -135,7 +137,35 @@ const baseOptions: Partial<ShardOptions> = {
   sharedInputs: [{ env: 'WORK' }],
 };
 
+/** Nx starts each command from the files on disk; so does each build here. */
+async function ownership(root: string) {
+  resetWorkspaceContext();
+  return workspaceOwnership(root, await hashableFiles(root));
+}
+
+const withMapper = (mapper: Record<string, string>) =>
+  `module.exports = { preset: '../../jest.preset.js', moduleNameMapper: ${JSON.stringify(mapper)} };\n`;
+
+function commit(root: string) {
+  for (const args of [
+    ['init', '-q'],
+    ['add', '.'],
+    [
+      '-c',
+      'user.name=fixture',
+      '-c',
+      'user.email=fixture@example.invalid',
+      'commit',
+      '-qm',
+      'Fixture',
+    ],
+  ]) {
+    execFileSync('git', args, { cwd: root });
+  }
+}
+
 async function targets(root: string, options: Partial<ShardOptions> = {}) {
+  resetWorkspaceContext();
   const context = { workspaceRoot: root, nxJsonConfiguration: {} } as unknown as CreateNodesContext;
   const configs = ['packages/app/jest.config.js', 'packages/lib/jest.config.js'];
   // The stock plugin resolves test paths against the working directory.
@@ -233,19 +263,15 @@ describe('plugin', () => {
     assert.ok(c.includes(WS + 'packages/app/child/**/*'), 'a child-root file keeps its own root');
   });
 
-  test('an import Jest cannot resolve fails the graph, naming config, importer and specifier', async () => {
+  test('a workspace import Jest cannot resolve fails the graph with what Jest said', async () => {
     const relative = workspace({ 'packages/app/src/a.test.js': "require('./missing');\n" });
     await assert.rejects(
       targets(relative),
-      /packages\/app\/jest\.config\.js: packages\/app\/src\/a\.test\.js: '\.\/missing'/,
+      /project\/config packages\/app \(packages\/app\/jest\.config\.js\): packages\/app\/src\/a\.test\.js: '\.\/missing' \(relative\): Cannot find module/,
     );
-    // Not under any alias or known scope: nothing unresolved is dropped. Both
-    // configs resolve alike and share the work, so either may be named.
-    const bare = workspace({ 'packages/lib/src/util.js': "require('not-installed');\n" });
-    await assert.rejects(
-      targets(bare),
-      /packages\/(app|lib)\/jest\.config\.js: packages\/lib\/src\/util\.js: 'not-installed'/,
-    );
+    // A name no workspace package, scope or mapper claims is third-party code
+    // that is not installed: the lockfile changes when it is.
+    await targets(workspace({ 'packages/lib/src/util.js': "require('not-installed');\n" }));
   });
 
   test('one shared file resolves per project, and a mapped file brings its own imports', async () => {
@@ -352,29 +378,43 @@ describe('plugin', () => {
     }
   });
 
-  test('a gitignored file fails the graph, whether imported or loaded by the config', async () => {
-    const ignored = async (overrides: Record<string, string>) => {
-      const root = workspace({ '.gitignore': 'local/\n', ...overrides });
-      assert.equal(spawnSync('git', ['init', '-q'], { cwd: root }).status, 0);
-      return targets(root);
+  test('a file Nx does not hash fails the graph, whether imported or loaded by the config', async () => {
+    const setup = {
+      'packages/lib/jest.config.js':
+        "module.exports = { preset: '../../jest.preset.js', setupFiles: ['<rootDir>/local/setup.js'] };\n",
+      'packages/lib/local/setup.js': 'global.x = 1;\n',
     };
+    const imported = {
+      'packages/lib/src/util.js': "require('../local/built');\n",
+      'packages/lib/local/built.js': '',
+    };
+    const unhashed = (file: string) =>
+      new RegExp(`packages/lib/local/${file} is loaded or imported, but Nx does not hash it`);
     // A setup file with no imports: nothing reaches it, it is only a root.
-    await assert.rejects(
-      ignored({
-        'packages/lib/jest.config.js':
-          "module.exports = { preset: '../../jest.preset.js', setupFiles: ['<rootDir>/local/setup.js'] };\n",
-        'packages/lib/local/setup.js': 'global.x = 1;\n',
-      }),
-      /packages\/lib\/local\/setup\.js is loaded or imported but ignored by git/,
-    );
-    await assert.rejects(
-      ignored({
-        'packages/lib/src/util.js': "require('../local/built');\n",
-        'packages/lib/local/built.js': '',
-      }),
-      /packages\/lib\/local\/built\.js is loaded or imported but ignored by git/,
-    );
-    await ignored({});
+    for (const [overrides, pattern] of [
+      [setup, unhashed('setup\\.js')],
+      [imported, unhashed('built\\.js')],
+    ] as const) {
+      const ignoring: Record<string, string>[] = [
+        { '.gitignore': 'local/\n' },
+        { '.nxignore': 'packages/lib/local\n' },
+        { 'packages/lib/.gitignore': '/local/*.js\n' },
+      ];
+      for (const rules of ignoring) {
+        await assert.rejects(targets(workspace({ ...rules, ...overrides })), pattern);
+      }
+      // Git still tracks a file committed before a rule matched it; Nx leaves it out all the same.
+      const tracked = workspace(overrides);
+      commit(tracked);
+      await targets(tracked);
+      writeFileSync(join(tracked, '.gitignore'), 'local/\n');
+      assert.match(
+        execFileSync('git', ['ls-files', 'packages/lib/local'], { cwd: tracked, encoding: 'utf8' }),
+        /packages\/lib\/local\//,
+      );
+      await assert.rejects(targets(tracked), pattern);
+    }
+    await targets(workspace({ '.gitignore': 'local/\n', '.nxignore': 'elsewhere\n' }));
   });
 
   test('a config is evaluated once per load', async () => {
@@ -387,13 +427,6 @@ describe('plugin', () => {
     assert.equal(readFileSync(join(root, 'packages/lib/calls'), 'utf8'), 'x');
     assert.equal(project.rootDir, join(root, 'packages/lib'));
     assert.deepEqual(project.jestLoaded, ['tools/setup.js'], 'the preset still applies');
-  });
-
-  test('a declared shared file that is missing fails the graph', async () => {
-    await assert.rejects(
-      targets(workspace(), { sharedInputs: ['{workspaceRoot}/tools/gone.js'] }),
-      /sharedInputs: tools\/gone\.js cannot be read/,
-    );
   });
 
   test('an environment with unknown export conditions fails unless the config declares them', async () => {
@@ -422,6 +455,310 @@ describe('plugin', () => {
         "module.exports = { rootDir: '../app', preset: '../../jest.preset.js' };\n",
     });
     await assert.rejects(targets(root), /packages\/lib\/jest\.config\.js sets rootDir/);
+  });
+
+  test('all unresolved imports across roots are reported together with the resolver hint', async () => {
+    const root = workspace({
+      'packages/app/src/a.test.js': "require('./missing-a');\nrequire('@acme/typo');\n",
+      'packages/lib/src/util.test.js': "require('./missing-b');\n",
+      'packages/no-tests/package.json': '{ "name": "@acme/local" }',
+    });
+    await assert.rejects(targets(root), (error: Error) => {
+      for (const message of [
+        "a.test.js: './missing-a' (relative)",
+        "a.test.js: '@acme/typo' (workspace-scope)",
+        "util.test.js: './missing-b' (relative)",
+        'project/config packages/app (packages/app/jest.config.js)',
+        'project/config packages/lib (packages/lib/jest.config.js)',
+        "fix the import or the project's moduleNameMapper",
+      ])
+        assert.ok(error.message.includes(message), message);
+      return true;
+    });
+  });
+
+  test('ignored build outputs, coverage and checkout copies do not enter workspace inventory', async () => {
+    const root = workspace({
+      '.gitignore': 'node_modules\n.nx\ndist/\ncoverage/\n.sandbox/worktrees/\n',
+      'dist/package.json': '{ "name": "app" }',
+      'coverage/package.json': '{ "name": "app" }',
+      '.sandbox/worktrees/copy/packages/app/package.json': '{ "name": "app" }',
+      'node_modules/external/package.json': '{',
+      '.nx/cache/package.json': '{',
+    });
+    assert.deepEqual([...(await ownership(root)).packages], [['app', 'packages/app']]);
+    await targets(root);
+  });
+
+  test('nested Git repositories and worktrees are excluded by their Git marker', async () => {
+    const root = workspace({
+      '.sandbox/worktrees/copy/.git': 'gitdir: /unused/path\n',
+      '.sandbox/worktrees/copy/packages/app/package.json': '{ "name": "app" }',
+      'checkouts/copy/.git/config': '',
+      'checkouts/copy/package.json': '{',
+    });
+    assert.deepEqual([...(await ownership(root)).packages], [['app', 'packages/app']]);
+    await targets(root);
+  });
+
+  test('nested ignore rules exclude invalid fixtures and honor manifest negations', async () => {
+    const root = workspace({
+      'packages/no-tests/.gitignore': 'fixtures/\n*.json\n!package.json\n',
+      'packages/no-tests/package.json': '{ "name": "@acme/local" }',
+      'packages/no-tests/fixtures/package.json': '{',
+      '.nxignore': 'tools/fixtures/\n',
+      'tools/fixtures/package.json': '{',
+    });
+    assert.equal((await ownership(root)).packages.get('@acme/local'), 'packages/no-tests');
+    await targets(root);
+  });
+
+  test('duplicate source package names report both manifest paths', async () => {
+    const root = workspace({ 'packages/copy/package.json': '{ "name": "app" }' });
+    await assert.rejects(
+      () => ownership(root),
+      (error: Error) => {
+        for (const message of [
+          "duplicate workspace package 'app'",
+          'packages/app/package.json',
+          'packages/copy/package.json',
+        ])
+          assert.ok(error.message.includes(message), message);
+        return true;
+      },
+    );
+  });
+
+  test('an unresolved package under an existing workspace scope fails without an alias', async () => {
+    const root = workspace({
+      'packages/app/src/a.test.js': "require('@acme/undeclared');\n",
+      'packages/no-tests/package.json': '{ "name": "@acme/no-tests" }',
+    });
+    await assert.rejects(targets(root), /@acme\/undeclared/);
+  });
+
+  test('an unresolved unscoped local package with no tests fails', async () => {
+    const root = workspace({
+      'packages/app/src/a.test.js': "require('local-util');\n",
+      'packages/no-tests/package.json': '{ "name": "local-util", "main": "missing.js" }',
+    });
+    await assert.rejects(targets(root), /local-util.*workspace-package/);
+  });
+
+  test('an unresolved subpath of a nested local package fails', async () => {
+    const root = workspace({
+      'packages/app/src/a.test.js': "require('local-util/missing');\n",
+      'packages/app/child/package.json': '{ "name": "local-util" }',
+    });
+    await assert.rejects(targets(root), /local-util\/missing.*workspace-package/);
+  });
+
+  test('a nonexistent package inside a local scope names project, importer, specifier and classification', async () => {
+    const root = workspace({
+      'packages/app/src/leaf-a.js': "require('@acme/typo');\n",
+      'packages/app/child/package.json': '{ "name": "@acme/child" }',
+    });
+    await assert.rejects(
+      targets(root),
+      /project\/config packages\/app \(packages\/app\/jest.config.js\): packages\/app\/src\/leaf-a.js: '@acme\/typo' \(workspace-scope\)/,
+    );
+  });
+
+  test('a third-party package sharing a local scope resolves from node_modules', async () => {
+    const root = workspace({
+      'packages/app/src/a.test.js': "require('@acme/published');\n",
+      'packages/no-tests/package.json': '{ "name": "@acme/local" }',
+      'node_modules/@acme/published/package.json':
+        '{ "name": "@acme/published", "main": "index.js" }',
+      'node_modules/@acme/published/index.js': "require('./external');\n",
+    });
+    const a = shardWith(await targets(root), 'packages/app', 'packages/app/src/a.test.js');
+    assert.ok(!a.some((i) => typeof i === 'string' && i.includes('node_modules/')));
+    assert.ok(!(await ownership(root)).packages.has('@acme/published'));
+  });
+
+  test('a mapped mock of an undeclared workspace-scoped package succeeds', async () => {
+    const root = workspace({
+      'packages/app/src/a.test.js': "require('@acme/virtual');\n",
+      'packages/no-tests/package.json': '{ "name": "@acme/local" }',
+      'packages/app/jest.config.js': withMapper({
+        '^@acme/virtual$': '<rootDir>/../../tools/mocks/virtual.js',
+      }),
+      'tools/mocks/virtual.js': "require('./helper');\n",
+      'tools/mocks/helper.js': '',
+    });
+    const byProject = await targets(root);
+    const a = shardWith(byProject, 'packages/app', 'packages/app/src/a.test.js');
+    assert.ok(a.includes(WS + 'tools/mocks/virtual.js'));
+    assert.ok(a.includes(WS + 'tools/mocks/helper.js'));
+  });
+
+  test('a workspace package reached through a node_modules symlink stays in the closure', async () => {
+    const root = workspace({
+      'packages/app/src/a.test.js': "require('@acme/local');\n",
+      'packages/no-tests/package.json': '{ "name": "@acme/local", "main": "index.js" }',
+      'packages/no-tests/index.js': "require('./helper');\n",
+      'packages/no-tests/helper.js': '',
+    });
+    mkdirSync(join(root, 'node_modules/@acme'), { recursive: true });
+    symlinkSync(join(root, 'packages/no-tests'), join(root, 'node_modules/@acme/local'), 'dir');
+    const a = shardWith(await targets(root), 'packages/app', 'packages/app/src/a.test.js');
+    assert.ok(a.includes(WS + 'packages/no-tests/index.js'));
+    assert.ok(a.includes(WS + 'packages/no-tests/helper.js'));
+  });
+
+  test('an absent shared graph entrypoint fails before target creation', async () => {
+    await assert.rejects(
+      targets(workspace(), { sharedInputs: ['{workspaceRoot}/tools/missing.js'] }),
+      /shared input tools\/missing.js.*'tools\/missing.js' \(graph-entrypoint\)/,
+    );
+  });
+
+  test('a traversed workspace file removed after a warm inference fails', async () => {
+    const root = workspace();
+    await targets(root);
+    rmSync(join(root, 'packages/app/src/leaf-a2.js'));
+    await assert.rejects(targets(root), /leaf-a.js: '\.\/leaf-a2' \(relative\)/);
+  });
+
+  test('a Git workspace sees warm source deletion and manifest inventory changes', async () => {
+    const root = workspace({ '.gitignore': '.nx\nnode_modules\n' });
+    commit(root);
+    await targets(root);
+    rmSync(join(root, 'packages/app/src/leaf-a2.js'));
+    await assert.rejects(targets(root), /leaf-a.js: '\.\/leaf-a2' \(relative\)/);
+    writeFileSync(join(root, 'packages/app/src/leaf-a2.js'), '');
+    writeFileSync(join(root, 'packages/app/src/a.test.js'), "require('@acme/unknown');\n");
+    await targets(root);
+    mkdirSync(join(root, 'packages/no-tests'), { recursive: true });
+    writeFileSync(join(root, 'packages/no-tests/package.json'), '{ "name": "@acme/local" }');
+    await assert.rejects(targets(root), /@acme\/unknown.*workspace-scope/);
+  });
+
+  test('ignore-file edits update ownership after warm inference', async () => {
+    const root = workspace({
+      '.gitignore': 'packages/no-tests/\n',
+      'packages/no-tests/package.json': '{ "name": "@acme/local" }',
+      'packages/app/src/a.test.js': "require('@acme/unknown');\n",
+    });
+    await targets(root);
+    writeFileSync(join(root, '.gitignore'), '');
+    await assert.rejects(targets(root), /@acme\/unknown.*workspace-scope/);
+    writeFileSync(join(root, '.gitignore'), 'packages/no-tests/\n');
+    await targets(root);
+  });
+
+  test('manifest additions and deletions invalidate warm workspace ownership', async () => {
+    const root = workspace({ 'packages/app/src/a.test.js': "require('@acme/unknown');\n" });
+    await targets(root);
+    mkdirSync(join(root, 'packages/no-tests'), { recursive: true });
+    writeFileSync(join(root, 'packages/no-tests/package.json'), '{ "name": "@acme/local" }');
+    await assert.rejects(targets(root), /@acme\/unknown.*workspace-scope/);
+    rmSync(join(root, 'packages/no-tests'), { recursive: true });
+    await targets(root);
+  });
+
+  test('manifest main changes invalidate warm symlink resolution', async () => {
+    const root = workspace({
+      'packages/app/src/a.test.js': "require('local-util');\n",
+      'packages/no-tests/package.json': '{ "name": "local-util", "main": "index.js" }',
+      'packages/no-tests/index.js': '',
+      'packages/no-tests/other.js': '',
+    });
+    mkdirSync(join(root, 'node_modules'), { recursive: true });
+    symlinkSync(join(root, 'packages/no-tests'), join(root, 'node_modules/local-util'), 'dir');
+    await targets(root);
+    writeFileSync(
+      join(root, 'packages/no-tests/package.json'),
+      '{ "name": "local-util", "main": "other.js" }',
+    );
+    const a = shardWith(await targets(root), 'packages/app', 'packages/app/src/a.test.js');
+    assert.ok(a.includes(WS + 'packages/no-tests/other.js'));
+    assert.ok(!a.includes(WS + 'packages/no-tests/index.js'));
+  });
+
+  test('a failed mapper is rejected even for an otherwise external name', async () => {
+    const root = workspace({
+      'packages/app/src/a.test.js': "require('virtual-mock');\n",
+      'packages/app/jest.config.js': withMapper({
+        '^virtual-mock$': '<rootDir>/../../tools/missing.js',
+      }),
+    });
+    await assert.rejects(
+      targets(root),
+      /virtual-mock' \(mapper-owned\): .*Could not locate module/,
+    );
+  });
+
+  test('a mapper change recomputes a warm closure', async () => {
+    const root = workspace({ 'packages/lib/other.js': '' });
+    await targets(root);
+    writeFileSync(
+      join(root, 'packages/app/jest.config.js'),
+      withMapper({ '^@lib/util$': '<rootDir>/../lib/other.js' }),
+    );
+    const byProject = await targets(root);
+    const b = shardWith(byProject, 'packages/app', 'packages/app/src/b.test.js');
+    assert.ok(b.includes(WS + 'packages/lib/other.js'));
+    assert.ok(!b.includes(WS + 'packages/lib/src/util.js'));
+  });
+
+  test('malformed workspace manifests fail inventory', async () => {
+    await assert.rejects(
+      targets(workspace({ 'packages/no-tests/package.json': '{' })),
+      /invalid workspace manifest packages\/no-tests\/package.json/,
+    );
+  });
+
+  test('a malformed Jest config fails graph construction', async () => {
+    await assert.rejects(
+      targets(workspace({ 'packages/lib/jest.config.js': 'module.exports = {' })),
+    );
+  });
+
+  test('a manifest that is not an object fails inventory with its path', async () => {
+    await assert.rejects(
+      targets(workspace({ 'packages/no-tests/package.json': 'null' })),
+      /invalid workspace manifest packages\/no-tests\/package.json/,
+    );
+  });
+
+  test('a package linked after a failed build resolves on the next one', async () => {
+    const root = workspace({
+      'packages/app/src/a.test.js': "require('@acme/local');\n",
+      'packages/no-tests/package.json': '{ "name": "@acme/local", "main": "index.js" }',
+      'packages/no-tests/index.js': '',
+    });
+    await assert.rejects(targets(root), /'@acme\/local' \(workspace-package\)/);
+    // Only node_modules changes: no manifest or source file does.
+    link(root, '@acme/local', 'packages/no-tests');
+    const a = shardWith(await targets(root), 'packages/app', 'packages/app/src/a.test.js');
+    assert.ok(a.includes(WS + 'packages/no-tests/index.js'));
+  });
+
+  test('classification uses manifest names, subpaths, scopes and mappers independently', async () => {
+    const owned = await ownership(
+      workspace({
+        'packages/no-tests/package.json': '{ "name": "@acme/local" }',
+        'packages/app/child/package.json': '{ "name": "nested-local" }',
+      }),
+    );
+    assert.equal(owned.packages.get('nested-local'), 'packages/app/child');
+    for (const [specifier, expected] of [
+      ['@acme/local', 'workspace-package'],
+      ['@acme/local/subpath', 'workspace-package'],
+      ['nested-local/subpath', 'workspace-package'],
+      ['@acme/typo', 'workspace-scope'],
+      ['@alias/path', 'mapper-owned'],
+      ['./file', 'relative'],
+      ['/file', 'absolute'],
+      ['@other/external', undefined],
+      ['nested-local-other', undefined],
+    ])
+      assert.equal(
+        classifyWorkspaceImport(specifier!, owned, (name) => name.startsWith('@alias/')),
+        expected,
+      );
   });
 
   test('a test importing a test fails', async () => {

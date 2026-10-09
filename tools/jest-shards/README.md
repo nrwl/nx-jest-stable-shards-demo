@@ -105,12 +105,14 @@ What a resolved path means:
 - A package name that resolves into the workspace also adds that package's `package.json`, because its `main` and `exports` decide the result.
 - A file with another extension (`.json`, `.css`) is an input with no imports of its own.
 
-The graph fails, naming the Jest config, the importer and the specifier, when:
+The graph fails, listing every failure with the project and its Jest config, the importer, the specifier and a classification, when:
 
-- Jest cannot resolve a static import. This includes a package whose `main` points at a build output that does not exist: map the name to tracked source or to a mock in `moduleNameMapper`. The plugin never guesses a source file.
-- A specifier resolves to a file that git ignores (a build output that happens to exist locally). Nx does not hash ignored files, so the shard could keep a stale cache hit.
+- Jest cannot resolve a static import that the workspace owns. The raw specifier decides that, not Jest's failure: it is relative (`relative`) or absolute (`absolute`), it names a workspace package or a subpath of one (`workspace-package`), a `moduleNameMapper` pattern of the project matches it (`mapper-owned`), or its scope is the scope of a workspace package (`workspace-scope`). This includes a package whose `main` points at a build output that does not exist: map the name to hashed source or to a mock in `moduleNameMapper`. The plugin never guesses a source file. There is no ignore-unresolved switch.
+- A file that is loaded or imported is not among the files Nx hashes: `.gitignore` or `.nxignore` excludes it at any depth, whether or not Git tracks it (a build output that happens to exist locally, a setup file kept out of the repository). Naming such a file in `inputs` adds nothing to the hash, so the shard could keep a stale cache hit. The check asks Nx for its file inventory instead of asking Git.
 - A specifier resolves outside the workspace and outside `node_modules`.
-- A test, a declared shared file or a traversed file cannot be read.
+- A test or a declared shared file cannot be read (`graph-entrypoint`), or a traversed file cannot (`workspace-file`).
+
+An unresolved import of a name that nothing in the workspace claims (an optional third-party `require` inside a `try`, a package that is not installed) does not fail the graph and is not an input. The plugin logs one warning with the count and the first five. Installing the package changes the lockfile, which is part of every hash.
 
 `scripts/mapper-fixture.ts` runs seventeen such cases on `fixtures/mappers` and checks the plugin and Jest against the same recorded results.
 
@@ -127,6 +129,8 @@ The graph fails, naming the Jest config, the importer and the specifier, when:
 - A config computed from the environment or the clock is loaded as it is at graph time. Declare the variable in `sharedInputs` (`{ "env": "NAME" }`).
 - Computed `require()` calls, `jest.requireActual`, `jest.mock` targets that nothing imports, runtime file reads and `__mocks__` directories (Jest's implicit mock lookup) are invisible to import analysis. Declare them in `sharedInputs`.
 - An ESM config (`jest.config.mjs`) is loaded once per process. With the Nx daemon, restart it after editing one.
+- Workspace ownership comes from the `package.json` files Nx hashes, including nested packages and packages without tests. Ignore build outputs, copied checkouts and invalid test-fixture manifests in `.gitignore` or `.nxignore`. A directory below the root that holds a `.git` entry (a nested repository, a worktree, a Git submodule) is skipped: its packages are not in the inventory, so an unresolved import of one is only caught when a mapper or a known scope claims the name. A hashed manifest that is not a JSON object fails, and a duplicate package name reports both paths.
+- The file inventory and the ignore rules come from `globWithWorkspaceContext` in `nx/src/devkit-internals.js`, which is not public API. Recheck it on every Nx move, starting with 23.3.0 stable.
 - A path containing a backslash fails. Nx has no escape for `(`, `)` and `|`, so each becomes `?`, which also matches any other character in that position.
 
 ## The closure cap

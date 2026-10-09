@@ -1,17 +1,23 @@
 import { cruise } from 'dependency-cruiser';
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import type { ResolutionContext } from './jest-context.ts';
+import { classifyWorkspaceImport, type WorkspaceOwnership } from './ownership.ts';
 
 /** A file whose imports are followed under one project's resolution. */
 export interface ClosureRoot {
   /** Workspace-relative. */
   file: string;
   context: ResolutionContext;
-  /** Names the Jest config in errors. */
+  /** Names the project and its Jest config in errors. */
   config: string;
+}
+
+export interface Workspace {
+  /** The files Nx can hash, workspace-relative. */
+  hashable: Set<string>;
+  ownership: WorkspaceOwnership;
 }
 
 /** Files dependency-cruiser reads specifiers from; anything else Jest resolves is a leaf. */
@@ -22,19 +28,30 @@ const SCANNED = /\.[cm]?[jt]sx?$/;
  * dependency-cruiser only extracts each file's static specifiers; the
  * context's Jest resolver decides what they mean, and every workspace file
  * it names is extracted and traversed in turn. A root that cannot be read,
- * or an import Jest cannot resolve, fails the graph: a silently smaller
- * closure would let a shard keep a stale cache hit.
+ * a file Nx cannot hash, or a workspace import Jest cannot resolve, fails the
+ * graph: a silently smaller closure would let a shard keep a stale cache
+ * hit. Jest's own failure is not trusted to mean "external": the raw
+ * specifier is classified against the workspace's packages, scopes and the
+ * project's mappers. Only a name nothing claims is left out, and reported in
+ * `external`.
  */
 export async function importClosures(
   workspaceRoot: string,
   roots: ClosureRoot[],
-): Promise<(context: ResolutionContext, file: string) => Set<string>> {
+  { hashable, ownership }: Workspace,
+): Promise<{
+  closureOf: (context: ResolutionContext, file: string) => Set<string>;
+  /** Unresolved imports of names the workspace does not own: `importer: 'specifier'`. */
+  external: string[];
+}> {
   /** Context key, then importer, to the workspace files it resolves to. */
   const edges = new Map<string, Map<string, string[]>>();
   const specifiersOf = new Map<string, string[]>();
   const parsed = new Map<string, string[]>();
   const manifests = new Map<string, string | null>();
-  const problems: string[] = [];
+  const problems = new Set<string>();
+  const external = new Set<string>();
+  const entrypoints = new Set(roots);
 
   const queued = new Set<string>();
   let wave: ClosureRoot[] = [];
@@ -57,14 +74,23 @@ export async function importClosures(
     for (const entry of wave) {
       const { file, context, config } = entry;
       if (unread.has(file)) {
-        problems.push(`${config}: ${file} cannot be read`);
+        const classification = entrypoints.has(entry) ? 'graph-entrypoint' : 'workspace-file';
+        problems.add(`project/config ${config}: ${file}: '${file}' (${classification})`);
         continue;
       }
       const followed = new Set<string>();
       for (const specifier of specifiersOf.get(file)!) {
         for (const resolution of context.resolve(file, specifier)) {
           if (resolution.kind === 'error') {
-            problems.push(`${config}: ${file}: '${specifier}': ${resolution.message}`);
+            const classification = classifyWorkspaceImport(specifier, ownership, (name) =>
+              context.maps(name),
+            );
+            if (!classification) external.add(`${file}: '${specifier}'`);
+            else
+              problems.add(
+                `project/config ${config}: ${file}: '${specifier}' (${classification}): ` +
+                  resolution.message,
+              );
           } else if (resolution.kind === 'workspace') {
             followed.add(resolution.file);
             enqueue({ file: resolution.file, context, config }, next);
@@ -92,22 +118,25 @@ export async function importClosures(
       for (const target of targets) inputs.add(target);
     }
   }
-  for (const file of gitIgnored(workspaceRoot, [...inputs])) {
-    problems.push(
-      `${file} is loaded or imported but ignored by git, so Nx cannot hash it. Track it, ` +
-        'or map the import to tracked source or a mock in moduleNameMapper',
+  for (const file of [...inputs].sort()) {
+    if (hashable.has(file)) continue;
+    problems.add(
+      `${file} is loaded or imported, but Nx does not hash it: .gitignore or .nxignore ` +
+        'excludes it. Stop ignoring it, or map the import to hashed source or a mock in ' +
+        'moduleNameMapper',
     );
   }
-  if (problems.length > 0) {
-    const shown = problems.slice(0, 50);
-    if (problems.length > shown.length) shown.push(`and ${problems.length - shown.length} more`);
+  if (problems.size > 0) {
+    const shown = [...problems].slice(0, 50);
+    if (problems.size > shown.length) shown.push(`and ${problems.size - shown.length} more`);
     throw new Error(
-      'jest-shards: the import graph is incomplete (Jest config: importer: specifier: reason):\n  ' +
+      'jest-shards: cannot resolve or read these workspace imports. Jest resolves them the ' +
+        "same way: fix the import or the project's moduleNameMapper:\n  " +
         shown.join('\n  '),
     );
   }
 
-  return (context, root) => {
+  const closureOf = (context: ResolutionContext, root: string) => {
     const contextEdges = edges.get(context.key);
     const seen = new Set<string>([root]);
     const queue = [root];
@@ -121,6 +150,7 @@ export async function importClosures(
     seen.delete(root);
     return seen;
   };
+  return { closureOf, external: [...external].sort() };
 }
 
 /**
@@ -212,20 +242,4 @@ function nearestManifest(
     memo.set(dir, manifest);
   }
   return manifest;
-}
-
-/** Nx hashes no ignored file, so one in a closure would be a hole in the inputs. */
-function gitIgnored(workspaceRoot: string, files: string[]): string[] {
-  if (files.length === 0 || !existsSync(join(workspaceRoot, '.git'))) return [];
-  const result = spawnSync('git', ['check-ignore', '-z', '--stdin'], {
-    cwd: workspaceRoot,
-    input: files.join('\0'),
-    encoding: 'utf8',
-    maxBuffer: 1 << 30,
-  });
-  // 0: some are ignored; 1: none are.
-  if (result.status !== 0 && result.status !== 1) {
-    throw new Error(`jest-shards: git check-ignore failed: ${result.stderr}`);
-  }
-  return result.stdout.split('\0').filter(Boolean);
 }

@@ -65,7 +65,7 @@ Each `test-ci--kk` target runs `jest -c jest.config.js --shard=k/shardCount --ru
 
 ### Imports resolve the way each project's Jest config resolves them
 
-The plugin has no alias option. It loads every `jest.config.*` with Jest's own loader and resolves each import with that project's Jest resolver, so `moduleNameMapper`, `<rootDir>`, module directories and package export conditions apply exactly as they do when the test runs. One shared file imported by two projects can therefore have two closures. An import Jest cannot resolve fails the graph with the config, the importer and the specifier. So does a gitignored file, whether a test imports it or the config loads it, because Nx cannot hash it.
+The plugin has no alias option. It loads every `jest.config.*` with Jest's own loader and resolves each import with that project's Jest resolver, so `moduleNameMapper`, `<rootDir>`, module directories and package export conditions apply exactly as they do when the test runs. One shared file imported by two projects can therefore have two closures. A workspace import Jest cannot resolve fails the graph with the project and config, the importer, the specifier and why the workspace owns it (a relative path, a workspace package or scope, a name a mapper claims). So does a file Nx does not hash, whether a test imports it or the config loads it: the plugin checks every input against Nx's own file inventory, so `.nxignore`, nested ignore files and tracked files that match an ignore rule are all caught.
 
 Each graph build evaluates a config once and starts from empty resolver caches, so a long-lived graph process sees a changed manifest or a newly created file. The files Node loads itself (the config, its preset, transformers) can reach a package that exports different files to `import` and `require`; both are inputs.
 
@@ -76,7 +76,7 @@ Each graph build evaluates a config once and starts from empty resolver caches, 
 - editing each resolved file makes exactly the dependent shards miss the cache;
 - changing only a mapper in a Jest config changes the closure;
 - cold and warm graph builds produce the same targets;
-- eight broken variants (an unmapped package with a missing `main`, the same with a gitignored build present, a gitignored setup file that nothing imports, an unresolvable specifier, a mapper to missing files, a missing relative file, a missing shared file, a `rootDir` outside the project) fail graph construction and name the cause.
+- ten broken variants (an unmapped package with a missing `main`, the same with a gitignored build present, a gitignored setup file that nothing imports, a setup file `.nxignore` excludes, a setup file Git tracks and `.gitignore` matches, an unresolvable specifier, a mapper to missing files, a missing relative file, a missing shared file, a `rootDir` outside the project) fail graph construction and name the cause.
 
 ## 3. Membership equals Jest
 
@@ -159,8 +159,26 @@ Results on `nx@23.3.0-beta.7`, run locally on the smoke fixture (476 tests in 64
 | Edit an alias target (`@packages/project-047` resolves to `packages/project-047/index.js`) | the importing test's shard: project-047:test-ci--02 | project-047:test-ci--02 | that shard misses: project-047:test-ci--02 | project-047:test-ci--02 | pass |
 | Cap stage 2 forced (`maxClosureInputs: 40`): edit a member test, a child-root file, a cross-project module | each selects the owning shard; siblings in the same directory may join | misses equal the selection; coverage assertion passes; parity OK | `packages/project-001/app/dir-00104/dir-00105/dir-00106/__tests__/test-00060.test.js`: selected project-001:test-ci--04; ran project-001:test-ci--04<br>`packages/project-001/project-004/app/dir-05541/dir-05566/dir-05567/__tests__/test-05461.leaf.js`: selected project-001:test-ci--04; ran project-001:test-ci--04<br>`packages/project-029/api/one.js`: selected 55 shards: project-001:test-ci--02, project-008:test-ci--01, project-009:test-ci--01, ...; ran 55 shards: project-001:test-ci--02, project-008:test-ci--01, project-009:test-ci--01, ...<br>parity OK | | pass |
 | Cap stage 3 forced (`maxClosureInputs: 1`): edit a member test, a child-root file, a cross-project module | each selects the owning shard; siblings in the same root may join | misses equal the selection; coverage assertion passes; parity OK | `packages/project-001/app/dir-00104/dir-00105/dir-00106/__tests__/test-00060.test.js`: selected project-001:test-ci--01, project-001:test-ci--02, project-001:test-ci--03, project-001:test-ci--04; ran project-001:test-ci--01, project-001:test-ci--02, project-001:test-ci--03, project-001:test-ci--04<br>`packages/project-001/project-004/app/dir-05541/dir-05566/dir-05567/__tests__/test-05461.leaf.js`: selected project-001:test-ci--01, project-001:test-ci--02, project-001:test-ci--03, project-001:test-ci--04; ran project-001:test-ci--01, project-001:test-ci--02, project-001:test-ci--03, project-001:test-ci--04<br>`packages/project-029/api/one.js`: selected 55 shards: project-001:test-ci--02, project-008:test-ci--01, project-009:test-ci--01, ...; ran 55 shards: project-001:test-ci--02, project-008:test-ci--01, project-009:test-ci--01, ...<br>parity OK | | pass |
-| Unresolved static workspace import | graph fails naming the file and specifier; no green cached result | graph failed: `packages/project-001/app/dir-00104/dir-00105/dir-00106/__tests__/test-00060.test.js: '@packages/project-001/missing'`; affected and run-many exit nonzero | | | pass |
+| Unresolved mapper-owned static workspace import | graph fails naming project/config, importer, specifier and classification; no green cached result | graph failed: `project/config packages/project-001 (packages/project-001/jest.config.js): packages/project-001/app/dir-00104/dir-00105/dir-00106/__tests__/test-00060.test.js: '@packages/project-001/missing' (mapper-owned)`; affected and run-many exit nonzero | | | pass |
 | Membership parity per config | union of shards equals `jest --listTests`, no duplicates; per-shard lists match `--shard=k/shardCount`; every config on disk produced shards | inventory: 57 Jest configs on disk, 57 with shards OK; 178 checks; PARITY OK | | | pass |
+
+The ownership guard also has named unit checks in `tools/jest-shards/plugin.test.ts`:
+
+<!-- prettier-ignore -->
+| Guard case | Required behavior |
+| --- | --- |
+| Unresolved package no mapper claims under an existing workspace scope, including a nonexistent package name | Fail graph construction before creating targets; name project/config, importer, specifier and classification |
+| Unresolved unscoped local package or local package subpath | Fail using the manifest inventory, including packages without tests and nested roots |
+| Published sibling under a workspace scope | Succeed when it resolves from `node_modules` |
+| Mapped mock | Succeed when it resolves to a file; include its transitive imports |
+| Workspace package reached through a `node_modules` symlink | Include its real source files and transitive imports in the closure |
+| Missing graph entrypoint or removed traversed workspace file | Fail graph construction |
+| Manifest inventory, ignore rules, a mapper or `node_modules` links changed after a build in the same process | Recompute ownership and resolution; nothing is cached between builds |
+| Ignored build output, copied checkout or invalid fixture manifest | Exclude it: the inventory is the `package.json` files Nx hashes; nested Git checkouts are excluded by their `.git` marker |
+| Duplicate nonignored source package name | Fail naming both manifest paths |
+| Multiple unresolved workspace imports | Report all failures with project/config, importer, specifier, classification, Jest's message and the resolver hint |
+| Unresolved name nothing in the workspace claims | Succeed with a warning; not an input |
+| Loaded or imported file excluded by `.gitignore`, a nested `.gitignore` or `.nxignore`, tracked or not | Fail graph construction naming the file |
 
 Notes on the results:
 
@@ -233,15 +251,15 @@ It works with any CI that supplies Git refs; `.github/workflows/dte.yml` is the 
 
 What you maintain afterwards:
 
-| Item                                                                                 | Notes                                                                                                                                                                                         |
-| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tools/jest-shards/`                                                                 | Plugin, bucket policy, sequencer, closures and their tests                                                                                                                                    |
-| One `testSequencer` line per Jest config                                             | The sequencer fails the run if the graph is stale                                                                                                                                             |
-| The `nx.json` plugin entry                                                           | Changing a count or isolating a test rebalances that project once                                                                                                                             |
-| `scripts/shard-targets.ts`, `scripts/parity.ts` and the CI step that calls the first | Replaces any hand-maintained target list                                                                                                                                                      |
-| CI env and cache restore on every machine                                            | Must be identical on the main job and agents                                                                                                                                                  |
-| The Nx version                                                                       | Rerun parity and the acceptance matrix on every move                                                                                                                                          |
-| Rules                                                                                | Tests do not import tests; `sharedInputs` lists what Jest reads outside imports; computed requires and runtime file reads need declared inputs; an import Jest cannot resolve fails the graph |
+| Item                                                                                 | Notes                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tools/jest-shards/`                                                                 | Plugin, bucket policy, sequencer, closures and their tests                                                                                                                                                                          |
+| One `testSequencer` line per Jest config                                             | The sequencer fails the run if the graph is stale                                                                                                                                                                                   |
+| The `nx.json` plugin entry                                                           | Changing a count or isolating a test rebalances that project once                                                                                                                                                                   |
+| `scripts/shard-targets.ts`, `scripts/parity.ts` and the CI step that calls the first | Replaces any hand-maintained target list                                                                                                                                                                                            |
+| CI env and cache restore on every machine                                            | Must be identical on the main job and agents                                                                                                                                                                                        |
+| The Nx version                                                                       | Rerun parity and the acceptance matrix on every move                                                                                                                                                                                |
+| Rules                                                                                | Tests do not import tests; `sharedInputs` lists what Jest reads outside imports; computed requires and runtime file reads need declared inputs; a workspace import Jest cannot resolve, or a file Nx does not hash, fails the graph |
 
 ## 9. Later: Nx Agents
 

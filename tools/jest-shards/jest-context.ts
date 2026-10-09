@@ -44,13 +44,26 @@ export class ResolutionContext {
   readonly #resolver: JestResolver;
   /** One set per way the importer may be loaded; a Jest context has exactly one. */
   readonly #conditions: string[][];
+  readonly #mappers: RegExp[];
   readonly #memo = new Map<string, Resolution[]>();
 
-  constructor(key: string, workspaceRoot: string, resolver: JestResolver, conditions: string[][]) {
+  constructor(
+    key: string,
+    workspaceRoot: string,
+    resolver: JestResolver,
+    conditions: string[][],
+    mappers: RegExp[] = [],
+  ) {
     this.key = key;
     this.#workspaceRoot = workspaceRoot;
     this.#resolver = resolver;
     this.#conditions = conditions;
+    this.#mappers = mappers;
+  }
+
+  /** Whether a `moduleNameMapper` pattern claims the specifier, resolved or not. */
+  maps(specifier: string): boolean {
+    return this.#mappers.some((pattern) => pattern.test(specifier));
   }
 
   /**
@@ -216,6 +229,7 @@ export class JestProjects {
         this.#workspaceRoot,
         Runtime.createResolver(projectConfig, ModuleMap.create(projectConfig.rootDir)),
         [conditions],
+        (projectConfig.moduleNameMapper ?? []).map(([pattern]) => new RegExp(pattern)),
       );
       this.#contexts.set(key, context);
     }
