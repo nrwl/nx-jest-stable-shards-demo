@@ -32,8 +32,10 @@ const SCANNED = /\.[cm]?[jt]sx?$/;
  * graph: a silently smaller closure would let a shard keep a stale cache
  * hit. Jest's own failure is not trusted to mean "external": the raw
  * specifier is classified against the workspace's packages, scopes and the
- * project's mappers. Only a name nothing claims is left out, and reported in
- * `external`.
+ * project's mappers. Only a name nothing claims, that Jest does not resolve
+ * either, is left out, and reported in `external`. A name Jest does resolve,
+ * to a file outside the workspace and outside `node_modules`, fails whatever
+ * the name is.
  */
 export async function importClosures(
   workspaceRoot: string,
@@ -81,7 +83,13 @@ export async function importClosures(
       const followed = new Set<string>();
       for (const specifier of specifiersOf.get(file)!) {
         for (const resolution of context.resolve(file, specifier)) {
-          if (resolution.kind === 'error') {
+          if (resolution.kind === 'unhashable') {
+            // Jest loads this file, whoever owns the name.
+            problems.add(
+              `project/config ${config}: ${file}: '${specifier}' (unhashable): ` +
+                resolution.message,
+            );
+          } else if (resolution.kind === 'error') {
             const classification = classifyWorkspaceImport(specifier, ownership, (name) =>
               context.maps(name),
             );

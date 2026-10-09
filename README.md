@@ -76,7 +76,7 @@ Each graph build evaluates a config once and starts from empty resolver caches, 
 - editing each resolved file makes exactly the dependent shards miss the cache;
 - changing only a mapper in a Jest config changes the closure;
 - cold and warm graph builds produce the same targets;
-- ten broken variants (an unmapped package with a missing `main`, the same with a gitignored build present, a gitignored setup file that nothing imports, a setup file `.nxignore` excludes, a setup file Git tracks and `.gitignore` matches, an unresolvable specifier, a mapper to missing files, a missing relative file, a missing shared file, a `rootDir` outside the project) fail graph construction and name the cause.
+- twelve broken variants (an unmapped package with a missing `main`, the same with a gitignored build present, a gitignored setup file that nothing imports, a setup file `.nxignore` excludes, a setup file Git tracks and `.gitignore` matches, an unresolvable specifier, a mapper to missing files, a missing relative file, a missing shared file, an unscoped and a scoped package linked from `node_modules` to a directory outside the workspace, a `rootDir` outside the project) fail graph construction and name the cause.
 
 ## 3. Membership equals Jest
 

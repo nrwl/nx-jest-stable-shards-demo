@@ -109,10 +109,10 @@ The graph fails, listing every failure with the project and its Jest config, the
 
 - Jest cannot resolve a static import that the workspace owns. The raw specifier decides that, not Jest's failure: it is relative (`relative`) or absolute (`absolute`), it names a workspace package or a subpath of one (`workspace-package`), a `moduleNameMapper` pattern of the project matches it (`mapper-owned`), or its scope is the scope of a workspace package (`workspace-scope`). This includes a package whose `main` points at a build output that does not exist: map the name to hashed source or to a mock in `moduleNameMapper`. The plugin never guesses a source file. There is no ignore-unresolved switch.
 - A file that is loaded or imported is not among the files Nx hashes: `.gitignore` or `.nxignore` excludes it at any depth, whether or not Git tracks it (a build output that happens to exist locally, a setup file kept out of the repository). Naming such a file in `inputs` adds nothing to the hash, so the shard could keep a stale cache hit. The check asks Nx for its file inventory instead of asking Git.
-- A specifier resolves outside the workspace and outside `node_modules`.
+- A specifier resolves outside the workspace and outside `node_modules` (`unhashable`): a package linked from `node_modules` to a sibling directory, for example. Jest runs that file and Nx has no hash for it, so this fails whoever owns the name, including a name nothing in the workspace claims. A setup file or another file the config loads from such a place fails the same way.
 - A test or a declared shared file cannot be read (`graph-entrypoint`), or a traversed file cannot (`workspace-file`).
 
-An unresolved import of a name that nothing in the workspace claims (an optional third-party `require` inside a `try`, a package that is not installed) does not fail the graph and is not an input. The plugin logs one warning with the count and the first five. Installing the package changes the lockfile, which is part of every hash.
+An import Jest itself cannot resolve, of a name that nothing in the workspace claims (an optional third-party `require` inside a `try`, a package that is not installed) does not fail the graph and is not an input. The plugin logs one warning with the count and the first five. Installing the package changes the lockfile, which is part of every hash.
 
 `scripts/mapper-fixture.ts` runs seventeen such cases on `fixtures/mappers` and checks the plugin and Jest against the same recorded results.
 

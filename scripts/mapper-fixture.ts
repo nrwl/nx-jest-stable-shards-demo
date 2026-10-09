@@ -119,6 +119,19 @@ function graphFails(parts: string[]): string {
 function reset() {
   git(['reset', '-q', '--hard']);
   git(['clean', '-fdq', '--', 'apps', 'pkgs', 'shared', '.nxignore']);
+  for (const name of OFFSITE) rmSync(join(ws, 'node_modules', name), { force: true });
+}
+/** Names linked from `node_modules` to a directory outside the workspace. */
+const OFFSITE = ['offsite-util', '@other/offsite'];
+/** Links `name` to a package beside the workspace and requires it from an alpha test. */
+function linkOffsite(name: string) {
+  const offsite = realpathSync(mkdtempSync(join(tmpdir(), 'mapper-fixture-offsite-')));
+  process.on('exit', () => rmSync(offsite, { recursive: true, force: true }));
+  writeFileSync(join(offsite, 'package.json'), '{ "main": "index.js" }\n');
+  writeFileSync(join(offsite, 'index.js'), 'module.exports = 1;\n');
+  mkdirSync(join(ws, 'node_modules', name, '..'), { recursive: true });
+  symlinkSync(offsite, join(ws, 'node_modules', name), 'dir');
+  appendFileSync(join(ws, 'apps/alpha/src/built.test.js'), `require('${name}');\n`);
 }
 function edit(file: string, from: string | RegExp, to: string) {
   const before = readFileSync(join(ws, file), 'utf8');
@@ -345,6 +358,17 @@ const failing: [string, string[], () => void][] = [
     () =>
       edit('nx.json', '"sharedInputs": [', '"sharedInputs": ["{workspaceRoot}/tools/gone.js", '),
   ],
+  ...OFFSITE.map((name): [string, string[], () => void] => [
+    `Import \`${name}\`, linked from \`node_modules\` to a directory outside the workspace`,
+    [
+      'apps/alpha/jest.config.js',
+      'apps/alpha/src/built.test.js',
+      `'${name}'`,
+      'unhashable',
+      'outside the workspace, which Nx cannot hash',
+    ],
+    () => linkOffsite(name),
+  ]),
   [
     "Set gamma's `rootDir` outside its project",
     ['apps/gamma/jest.config.js', 'rootDir'],

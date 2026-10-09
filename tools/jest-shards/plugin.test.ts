@@ -607,6 +607,39 @@ describe('plugin', () => {
     assert.ok(a.includes(WS + 'packages/no-tests/helper.js'));
   });
 
+  test('a package linked to a directory outside the workspace fails, whatever its name', async () => {
+    const offsite = realpathSync(mkdtempSync(join(tmpdir(), 'jest-shards-offsite-')));
+    roots.push(offsite);
+    writeFileSync(join(offsite, 'package.json'), '{ "main": "index.js" }');
+    writeFileSync(join(offsite, 'index.js'), 'module.exports = 1;\n');
+    const escaped = offsite.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Neither name is a workspace package, and `@other` is not a workspace scope.
+    for (const name of ['offsite-util', '@other/offsite']) {
+      const root = workspace({ 'packages/app/src/a.test.js': `require('${name}');\n` });
+      mkdirSync(dirname(join(root, 'node_modules', name)), { recursive: true });
+      symlinkSync(offsite, join(root, 'node_modules', name), 'dir');
+      await assert.rejects(
+        targets(root),
+        new RegExp(
+          `project/config packages/app \\(packages/app/jest.config.js\\): packages/app/src/a.test.js: ` +
+            `'${name}' \\(unhashable\\): resolves to ${escaped}/index.js, outside the workspace`,
+        ),
+      );
+    }
+    // The same name with nothing installed is an optional external, as before.
+    await targets(workspace({ 'packages/app/src/a.test.js': "require('offsite-util');\n" }));
+    // What the config loads is held to the same rule.
+    writeFileSync(join(offsite, 'setup.js'), 'global.x = 1;\n');
+    await assert.rejects(
+      targets(
+        workspace({
+          'packages/lib/jest.config.js': `module.exports = { preset: '../../jest.preset.js', setupFiles: [${JSON.stringify(join(offsite, 'setup.js'))}] };\n`,
+        }),
+      ),
+      new RegExp(`packages/lib/jest.config.js: loads ${escaped}/setup.js: .*outside the workspace`),
+    );
+  });
+
   test('an absent shared graph entrypoint fails before target creation', async () => {
     await assert.rejects(
       targets(workspace(), { sharedInputs: ['{workspaceRoot}/tools/missing.js'] }),

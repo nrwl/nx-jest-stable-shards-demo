@@ -26,11 +26,15 @@ const { ModuleMap } = require('jest-haste-map') as typeof import('jest-haste-map
 const Resolver = require('jest-resolve').default as typeof import('jest-resolve').default;
 type JestResolver = InstanceType<typeof Resolver>;
 
-/** A file path relative to the workspace root, a Node core module, or why Jest could not resolve. */
+/**
+ * A file path relative to the workspace root, a Node core module, a file Jest
+ * resolves to that Nx cannot hash, or why Jest could not resolve.
+ */
 export type Resolution =
   | { kind: 'workspace'; file: string }
   | { kind: 'external' }
   | { kind: 'core' }
+  | { kind: 'unhashable'; message: string }
   | { kind: 'error'; message: string };
 
 /**
@@ -69,7 +73,8 @@ export class ResolutionContext {
   /**
    * `importer` is workspace-relative. Every file the specifier can load is
    * returned: one per condition set, without repeats. A condition set that
-   * does not resolve is an error only when none does.
+   * does not resolve is an error only when none does; one that resolves to a
+   * file Nx cannot hash is always returned.
    */
   resolve(importer: string, specifier: string): Resolution[] {
     // Jest resolves against the importer's directory, so that is the memo key.
@@ -99,29 +104,36 @@ export class ResolutionContext {
         resolution = { kind: 'error', message: firstLines(error) };
       }
       if (resolution.kind === 'error') errors.push(resolution);
-      else
-        found.set(resolution.kind === 'workspace' ? resolution.file : resolution.kind, resolution);
+      else found.set(identity(resolution), resolution);
     }
     return found.size > 0 ? [...found.values()] : errors.slice(0, 1);
   }
 }
 
+function identity(resolution: Resolution): string {
+  if (resolution.kind === 'workspace') return resolution.file;
+  if (resolution.kind === 'unhashable') return `\0${resolution.message}`;
+  return resolution.kind;
+}
+
 /**
  * A workspace package linked into `node_modules` is workspace code, so the
- * real location decides, not the path the resolver walked.
+ * real location decides, not the path the resolver walked. The same goes for
+ * a link that leaves the workspace: Jest runs that file, and Nx has no hash
+ * for it.
  */
 function classify(workspaceRoot: string, resolved: string): Resolution {
   let real: string;
   try {
     real = realpathSync(resolved);
   } catch {
-    return { kind: 'error', message: `resolves to ${resolved}, which cannot be read` };
+    return { kind: 'unhashable', message: `resolves to ${resolved}, which cannot be read` };
   }
   if (real.split(sep).includes('node_modules')) return { kind: 'external' };
   const file = relative(workspaceRoot, real);
   if (file.startsWith('..') || isAbsolute(file)) {
     return {
-      kind: 'error',
+      kind: 'unhashable',
       message: `resolves to ${real}, outside the workspace, which Nx cannot hash`,
     };
   }
@@ -238,7 +250,7 @@ export class JestProjects {
       configFile,
       rootDir: projectConfig.rootDir,
       context,
-      nodeLoaded: this.#workspaceFiles([
+      nodeLoaded: this.#workspaceFiles(fail, [
         path,
         presetFile(preset, projectConfig.rootDir),
         ...projectConfig.transform.map(([, transformer]) => transformer),
@@ -252,7 +264,7 @@ export class JestProjects {
         projectConfig.dependencyExtractor,
         globalConfig.testSequencer,
       ]),
-      jestLoaded: this.#workspaceFiles([
+      jestLoaded: this.#workspaceFiles(fail, [
         ...projectConfig.setupFiles,
         ...projectConfig.setupFilesAfterEnv,
         ...projectConfig.snapshotSerializers,
@@ -260,12 +272,16 @@ export class JestProjects {
     };
   }
 
-  #workspaceFiles(paths: (string | null | undefined)[]): string[] {
+  #workspaceFiles(
+    fail: (message: string) => never,
+    paths: (string | null | undefined)[],
+  ): string[] {
     const files = new Set<string>();
     for (const path of paths) {
       if (!path || !isAbsolute(path)) continue;
       const resolution = classify(this.#workspaceRoot, path);
       if (resolution.kind === 'workspace') files.add(resolution.file);
+      else if (resolution.kind === 'unhashable') fail(`loads ${path}: ${resolution.message}`);
     }
     return [...files];
   }
