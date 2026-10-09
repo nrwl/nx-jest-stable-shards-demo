@@ -143,8 +143,24 @@ Results on `nx@23.3.0-beta.7`, run locally on the smoke fixture (476 tests in 64
 | Edit an alias target (`@packages/project-047` resolves to `packages/project-047/index.js`) | the importing test's shard: project-047:test-ci--02 | project-047:test-ci--02 | that shard misses: project-047:test-ci--02 | project-047:test-ci--02 | pass |
 | Cap stage 2 forced (`maxClosureInputs: 40`): edit a member test, a child-root file, a cross-project module | each selects the owning shard; siblings in the same directory may join | misses equal the selection; coverage assertion passes; parity OK | `packages/project-001/app/dir-00104/dir-00105/dir-00106/__tests__/test-00060.test.js`: selected project-001:test-ci--04; ran project-001:test-ci--04<br>`packages/project-001/project-004/app/dir-05541/dir-05566/dir-05567/__tests__/test-05461.leaf.js`: selected project-001:test-ci--04; ran project-001:test-ci--04<br>`packages/project-029/api/one.js`: selected 55 shards: project-001:test-ci--02, project-008:test-ci--01, project-009:test-ci--01, ...; ran 55 shards: project-001:test-ci--02, project-008:test-ci--01, project-009:test-ci--01, ...<br>parity OK | | pass |
 | Cap stage 3 forced (`maxClosureInputs: 1`): edit a member test, a child-root file, a cross-project module | each selects the owning shard; siblings in the same root may join | misses equal the selection; coverage assertion passes; parity OK | `packages/project-001/app/dir-00104/dir-00105/dir-00106/__tests__/test-00060.test.js`: selected project-001:test-ci--01, project-001:test-ci--02, project-001:test-ci--03, project-001:test-ci--04; ran project-001:test-ci--01, project-001:test-ci--02, project-001:test-ci--03, project-001:test-ci--04<br>`packages/project-001/project-004/app/dir-05541/dir-05566/dir-05567/__tests__/test-05461.leaf.js`: selected project-001:test-ci--01, project-001:test-ci--02, project-001:test-ci--03, project-001:test-ci--04; ran project-001:test-ci--01, project-001:test-ci--02, project-001:test-ci--03, project-001:test-ci--04<br>`packages/project-029/api/one.js`: selected 55 shards: project-001:test-ci--02, project-008:test-ci--01, project-009:test-ci--01, ...; ran 55 shards: project-001:test-ci--02, project-008:test-ci--01, project-009:test-ci--01, ...<br>parity OK | | pass |
-| Unresolved static workspace import | graph fails naming the file and specifier; no green cached result | graph failed: `packages/project-001/app/dir-00104/dir-00105/dir-00106/__tests__/test-00060.test.js: '@packages/project-001/missing'`; affected and run-many exit nonzero | | | pass |
+| Unresolved alias-owned static workspace import | graph fails naming project/config, importer, specifier and classification; no green cached result | graph failed: `project/config packages/project-001 (packages/project-001/jest.config.js): packages/project-001/app/dir-00104/dir-00105/dir-00106/__tests__/test-00060.test.js: '@packages/project-001/missing' (alias-owned)`; affected and run-many exit nonzero | | | pass |
 | Membership parity per config | union of shards equals `jest --listTests`, no duplicates; per-shard lists match `--shard=k/shardCount`; every config on disk produced shards | inventory: 57 Jest configs on disk, 57 with shards OK; 178 checks; PARITY OK | | | pass |
+
+The ownership guard also has named unit checks in `tools/jest-shards/plugin.test.ts`:
+
+<!-- prettier-ignore -->
+| Guard case | Required behavior |
+| --- | --- |
+| Unresolved package without an alias under an existing workspace scope, including a nonexistent package name | Fail graph construction before creating targets; name project/config, importer, specifier and classification |
+| Unresolved unscoped local package or local package subpath | Fail using the manifest inventory, including packages without tests and nested roots |
+| Published sibling under a workspace scope | Succeed when it resolves from `node_modules` |
+| Mapped mock | Succeed when it resolves to a file; include its transitive imports |
+| Workspace package reached through a `node_modules` symlink | Include its real source files and transitive imports in the closure |
+| Missing graph entrypoint or removed traversed workspace file | Fail graph construction |
+| Manifest inventory or resolution options changed after warm inference | Recompute ownership/resolution using a separate cache namespace |
+| Ignored build output, copied checkout or invalid fixture manifest | Exclude it using cascading `.gitignore`/`.nxignore` rules; nested Git checkouts are excluded by their `.git` marker |
+| Duplicate nonignored source package name | Fail naming both manifest paths |
+| Multiple unresolved workspace imports | Report all failures with project/config, importer, specifier, classification and the resolver hint |
 
 Notes on the results:
 
