@@ -63,7 +63,11 @@ test('deep cyclic and shared hubs terminate, cap stages differ, and every mode c
         s.exactClosureBeforeShared > s.exactClosureAfterShared,
     ),
   );
-  assert.ok(capped.shards.some((s: { hubFanIn: number }) => s.hubFanIn >= 8));
+  // The shared module has over 2,300 importers; it must not hide source hubs.
+  for (const shard of capped.shards) {
+    assert.equal(shard.hubFanIn, shard.exactClosure!.some((f) => f.includes('/part-0/')) ? 9 : 8);
+  }
+  assert.ok(capped.shards.some((s) => s.exactClosure!.includes('packages/outer/src/hub.js')));
   for (const shard of capped.shards) {
     const exact = reports.get('uncapped')!.shards.find((s: { id: string }) => s.id === shard.id);
     assert.ok(exact);
@@ -251,5 +255,49 @@ test('unresolved external and observed unsupported module counts come from the a
     assert.equal(report.projects[0].unsupportedCount, 1);
   } finally {
     rmSync(countsRoot, { recursive: true, force: true });
+  }
+});
+
+test('coverage and discovery honor Nx ignore rules without counting ignored imports as extra files', async () => {
+  const ignoredRoot = mkdtempSync(join(tmpdir(), 'closure-ignores-'));
+  const write = (file: string, content: string) => {
+    mkdirSync(join(ignoredRoot, file, '..'), { recursive: true });
+    writeFileSync(join(ignoredRoot, file), content);
+  };
+  try {
+    write('nx.json', JSON.stringify({ plugins: [{ plugin: './tools/jest-shards/plugin.ts' }] }));
+    write('package.json', '{"private":true}');
+    write('.gitignore', 'dist/\ncoverage/\n**/src/ignored.js\n');
+    write('.nxignore', 'app/generated/\n');
+    write('app/project.json', '{"name":"ignore-fixture"}');
+    write('app/package.json', '{"private":true}');
+    write('app/jest.config.js', "module.exports = { testMatch: ['*.test.js'] };\n");
+    write('app/a.test.js', "require('./src/leaf'); require('./src/ignored');\n");
+    write('app/src/leaf.js', 'module.exports = 1;');
+    write('app/src/ignored.js', 'module.exports = 2;');
+    write('app/src/.gitignore', '*.log\n!kept.log\n');
+    write('app/src/kept.log', 'included');
+    write('app/src/dropped.log', 'ignored');
+    for (const dir of ['dist', 'coverage', 'generated']) {
+      write(`app/${dir}/output.js`, 'ignored');
+      write(`app/${dir}/jest.config.js`, "throw new Error('Ignored config was loaded');");
+    }
+    symlinkSync(resolve('node_modules'), join(ignoredRoot, 'node_modules'), 'dir');
+    const widened = await analyze(ignoredRoot, { cap: 0 });
+    assert.equal(widened.summary.projectCount, 1);
+    assert.equal(widened.summary.shardCount, 1);
+    assert.equal(widened.shards[0].stage, 'roots');
+    assert.equal(widened.shards[0].exactClosureAfterShared, 2);
+    assert.equal(widened.shards[0].hashableExactClosureAfterShared, 1);
+    assert.equal(widened.shards[0].coveredFileCount, 7);
+    assert.equal(widened.shards[0].extraCoveredFiles, 6);
+    assert.equal(widened.projects[0].extraCoveredFiles, 6);
+    const exact = await analyze(ignoredRoot, { cap: 'uncapped' });
+    assert.equal(exact.shards[0].exactClosureAfterShared, 2);
+    assert.equal(exact.shards[0].coveredFileCount, 1);
+    assert.equal(exact.shards[0].extraCoveredFiles, 0);
+    assert.equal(exact.projects[0].hashableExactClosureAfterShared, 1);
+  } finally {
+    rmSync(ignoredRoot, { recursive: true, force: true });
   }
 });

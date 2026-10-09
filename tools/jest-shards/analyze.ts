@@ -1,8 +1,12 @@
 import type { CreateNodesContext } from '@nx/devkit';
-import { Minimatch } from 'minimatch';
-import { globSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import {
+  globWithWorkspaceContext,
+  multiGlobWithWorkspaceContext,
+  refreshWorkspaceContext,
+} from 'nx/src/utils/workspace-context.js';
 import { PLUGIN_PATH, normalizeOptions } from './buckets.ts';
 import { inferShards, createNodes, type InferenceMeasurements } from './plugin.ts';
 
@@ -38,10 +42,11 @@ export async function analyze(workspaceRoot: string, options: AnalyzeOptions = {
     shards: [],
     uncapped: options.cap === 'uncapped',
   };
-  const configs = globSync(createNodes[0], {
-    cwd: workspaceRoot,
-    exclude: ['**/node_modules/**', '**/.nx/**', '**/.git/**', '**/.paperclip/**'],
-  }).sort();
+  const configStarted = performance.now();
+  // Use the same ignored-file view as Nx plugin discovery and input hashing.
+  refreshWorkspaceContext(workspaceRoot);
+  const configs = (await globWithWorkspaceContext(workspaceRoot, [createNodes[0]])).sort();
+  const configMs = performance.now() - configStarted;
   const cwd = process.cwd();
   try {
     process.chdir(workspaceRoot);
@@ -54,14 +59,15 @@ export async function analyze(workspaceRoot: string, options: AnalyzeOptions = {
   } finally {
     process.chdir(cwd);
   }
+  measurements.discoveryMs += configMs;
   const scanStarted = performance.now();
-  const universe = globSync('**/*', {
-    cwd: workspaceRoot,
-    withFileTypes: true,
-    exclude: ['**/node_modules/**', '**/.nx/**', '**/.git/**', '**/.paperclip/**'],
-  })
-    .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name).slice(workspaceRoot.length + 1));
+  // Match each distinct source pattern once, then reuse it across shards.
+  const patterns = [...new Set(measurements.shards.flatMap((s) => s.patterns))];
+  const matches = await multiGlobWithWorkspaceContext(
+    workspaceRoot,
+    patterns.map((p) => p.slice('{workspaceRoot}/'.length)),
+  );
+  const coverage = new Map(patterns.map((pattern, index) => [pattern, matches[index]]));
   const roots = [...new Set(measurements.shards.map((s) => s.root))].sort();
   const projects = roots.map((root, index) => {
     const shards = measurements.shards.filter((s) => s.root === root);
@@ -79,10 +85,8 @@ export async function analyze(workspaceRoot: string, options: AnalyzeOptions = {
   const coveredByProject = new Map<string, Set<string>>();
   const patternsByProject = new Map<string, Set<string>>();
   const shards = measurements.shards.map((s, index) => {
-    const patterns = s.patterns.map((p) => p.slice('{workspaceRoot}/'.length));
-    const plain = new Set(patterns.filter((p) => !/[*?[\]{}!\\]/.test(p)));
-    const globs = patterns.filter((p) => !plain.has(p)).map((p) => new Minimatch(p, { dot: true }));
-    const covered = universe.filter((f) => plain.has(f) || globs.some((m) => m.match(f)));
+    const covered = new Set(s.patterns.flatMap((p) => coverage.get(p)!));
+    const hashableExactClosureAfterShared = s.afterShared.filter((f) => covered.has(f)).length;
     const projectCoverage = coveredByProject.get(s.root) ?? new Set<string>();
     for (const file of covered) projectCoverage.add(file);
     coveredByProject.set(s.root, projectCoverage);
@@ -99,9 +103,10 @@ export async function analyze(workspaceRoot: string, options: AnalyzeOptions = {
       cap: Number.isFinite(s.cap) ? s.cap : null,
       stage: s.stage,
       outputPatternCount: s.patterns.length,
-      coveredFileCount: covered.length,
-      extraCoveredFiles: covered.length - s.afterShared.length,
-      hubFanIn: s.beforeShared.reduce(
+      coveredFileCount: covered.size,
+      hashableExactClosureAfterShared,
+      extraCoveredFiles: covered.size - hashableExactClosureAfterShared,
+      hubFanIn: s.afterShared.reduce(
         (max, f) => Math.max(max, measurements.closures.fanIn.get(f) ?? 0),
         0,
       ),
@@ -145,7 +150,11 @@ export async function analyze(workspaceRoot: string, options: AnalyzeOptions = {
           .filter((s) => s.root === roots[index])
           .flatMap((s) => [...s.members, ...s.beforeShared]),
       );
-      const coveredFileCount = coveredByProject.get(roots[index])?.size ?? 0;
+      const covered = coveredByProject.get(roots[index]) ?? new Set<string>();
+      const afterShared = new Set(
+        measurements.shards.filter((s) => s.root === roots[index]).flatMap((s) => s.afterShared),
+      );
+      const hashableExactClosureAfterShared = [...afterShared].filter((f) => covered.has(f)).length;
       return {
         ...project,
         stages: Object.fromEntries(
@@ -155,8 +164,9 @@ export async function analyze(workspaceRoot: string, options: AnalyzeOptions = {
           ]),
         ),
         outputPatternCount: patternsByProject.get(roots[index])?.size ?? 0,
-        coveredFileCount,
-        extraCoveredFiles: coveredFileCount - project.exactClosureAfterShared,
+        coveredFileCount: covered.size,
+        hashableExactClosureAfterShared,
+        extraCoveredFiles: covered.size - hashableExactClosureAfterShared,
         hubFanIn: rows.reduce((max, s) => Math.max(max, s.hubFanIn), 0),
         unresolvedCount: [...reachable].reduce(
           (n, f) => n + (measurements.closures.unresolved.get(f) ?? 0),
