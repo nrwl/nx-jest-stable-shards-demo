@@ -52,7 +52,7 @@ Node 24 or later runs the TypeScript directly. The directory's `package.json` ma
 | Option             | Default | Meaning                                                                                                                                         |
 | ------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `testsPerShard`    | 25      | Target maximum average tests per hash bucket                                                                                                    |
-| `overrides`        | `{}`    | Per-project `testsPerShard`, keyed by project root                                                                                              |
+| `overrides`        | `{}`    | Per-project `testsPerShard` and/or `maxClosureInputs`, keyed by project root                                                                    |
 | `isolate`          | `[]`    | Workspace-relative test paths that each get a shard of their own                                                                                |
 | `sharedInputs`     | `[]`    | Inputs every shard of every project gets. Exact JS/TS files listed here are followed too (as Node resolves), so their imports are shared inputs |
 | `maxClosureInputs` | 1000    | Per-shard budget for the import closure before it widens to globs                                                                               |
@@ -151,3 +151,7 @@ node scripts/mapper-fixture.ts
 ```
 
 Run the parity check after any change to Jest configs, the plugin, the options or the Nx version. Discovery reads the stock plugin's per-file target names, which is a version-coupled convention.
+
+## Diagnostics
+
+Run `pnpm analyze --cap 1000`, `--cap 5000` or `--cap uncapped` for versioned counts-only JSON. The command uses the inference functions above without running tests or contacting Nx Cloud. Per-project budgets use `overrides.<project root>.maxClosureInputs`; the default remains 1000. See the repository [local diagnostics guide](../../README.md#local-closure-diagnostics) for the independent deep-hub fixture, field definitions, privacy flags and local cache locations.

@@ -5,6 +5,18 @@ import { dirname, extname, join } from 'node:path';
 import type { ResolutionContext } from './jest-context.ts';
 import { classifyWorkspaceImport, type WorkspaceOwnership } from './ownership.ts';
 
+export interface ContextMeasurements {
+  fanIn: Map<string, number>;
+  unresolved: Map<string, number>;
+  unsupported: Set<string>;
+}
+
+export interface ClosureMeasurements {
+  resolutionMs: number;
+  traversalMs: number;
+  contexts: Map<string, ContextMeasurements>;
+}
+
 /** A file whose imports are followed under one project's resolution. */
 export interface ClosureRoot {
   /** Workspace-relative. */
@@ -41,11 +53,13 @@ export async function importClosures(
   workspaceRoot: string,
   roots: ClosureRoot[],
   { hashable, ownership }: Workspace,
+  measurements?: ClosureMeasurements,
 ): Promise<{
   closureOf: (context: ResolutionContext, file: string) => Set<string>;
   /** Unresolved imports of names the workspace does not own: `importer: 'specifier'`. */
   external: string[];
 }> {
+  const started = performance.now();
   /** Context key, then importer, to the workspace files it resolves to. */
   const edges = new Map<string, Map<string, string[]>>();
   const specifiersOf = new Map<string, string[]>();
@@ -80,6 +94,15 @@ export async function importClosures(
         problems.add(`project/config ${config}: ${file}: '${file}' (${classification})`);
         continue;
       }
+      let observed = measurements?.contexts.get(context.key);
+      if (measurements && !observed) {
+        observed = { fanIn: new Map(), unresolved: new Map(), unsupported: new Set() };
+        measurements.contexts.set(context.key, observed);
+      }
+      if (observed && !SCANNED.test(file) && !file.endsWith('.json')) {
+        observed.unsupported.add(file);
+      }
+      let unresolvedCount = 0;
       const followed = new Set<string>();
       for (const specifier of specifiersOf.get(file)!) {
         for (const resolution of context.resolve(file, specifier)) {
@@ -90,6 +113,7 @@ export async function importClosures(
                 resolution.message,
             );
           } else if (resolution.kind === 'error') {
+            unresolvedCount++;
             const classification = classifyWorkspaceImport(specifier, ownership, (name) =>
               context.maps(name),
             );
@@ -113,6 +137,12 @@ export async function importClosures(
       let contextEdges = edges.get(context.key);
       if (!contextEdges) edges.set(context.key, (contextEdges = new Map()));
       contextEdges.set(file, [...followed]);
+      if (observed) {
+        observed.unresolved.set(file, unresolvedCount);
+        for (const target of followed) {
+          observed.fanIn.set(target, (observed.fanIn.get(target) ?? 0) + 1);
+        }
+      }
     }
     wave = next;
   }
@@ -144,7 +174,9 @@ export async function importClosures(
     );
   }
 
+  if (measurements) measurements.resolutionMs = performance.now() - started;
   const closureOf = (context: ResolutionContext, root: string) => {
+    const traversalStarted = performance.now();
     const contextEdges = edges.get(context.key);
     const seen = new Set<string>([root]);
     const queue = [root];
@@ -156,6 +188,7 @@ export async function importClosures(
       }
     }
     seen.delete(root);
+    if (measurements) measurements.traversalMs += performance.now() - traversalStarted;
     return seen;
   };
   return { closureOf, external: [...external].sort() };
