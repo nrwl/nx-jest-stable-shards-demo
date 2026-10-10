@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { after, describe, test } from 'node:test';
 import { resetWorkspaceContext } from 'nx/src/devkit-internals.js';
@@ -23,6 +24,7 @@ import StableShardSequencer from './sequencer.ts';
 process.env.NX_DAEMON = 'false'; // the daemon's glob ignores these throwaway workspace roots
 
 const WS = '{workspaceRoot}/';
+const require = createRequire(import.meta.url);
 const names = (n: number, prefix = 't') =>
   Array.from({ length: n }, (_, i) => `src/${prefix}${i}.test.js`);
 
@@ -427,6 +429,80 @@ describe('plugin', () => {
     assert.equal(readFileSync(join(root, 'packages/lib/calls'), 'utf8'), 'x');
     assert.equal(project.rootDir, join(root, 'packages/lib'));
     assert.deepEqual(project.jestLoaded, ['tools/setup.js'], 'the preset still applies');
+  });
+
+  test('config cache eviction preserves unrelated module state and reloads changed helpers', async () => {
+    const root = workspace({
+      'tools/state.cjs': 'module.exports = { value: 0 };\n',
+      'packages/app/config-helper.cjs': "module.exports = './leaf-a2';\n",
+      'packages/app/jest.config.js':
+        "module.exports = { preset: '../../jest.preset.js', moduleNameMapper: { '^local$': '<rootDir>/src/' + require('./config-helper.cjs') } };\n",
+      'packages/app/src/a.test.js': "require('local');\n",
+    });
+    const state = require(join(root, 'tools/state.cjs'));
+    state.value = 7;
+    const first = shardWith(await targets(root), 'packages/app', 'packages/app/src/a.test.js');
+    assert.ok(first.includes(WS + 'packages/app/src/leaf-a2.js'));
+    writeFileSync(join(root, 'packages/app/config-helper.cjs'), "module.exports = './leaf-odd';\n");
+    const second = shardWith(await targets(root), 'packages/app', 'packages/app/src/a.test.js');
+    assert.ok(second.includes(WS + 'packages/app/src/leaf-odd.js'));
+    assert.ok(!second.includes(WS + 'packages/app/src/leaf-a2.js'));
+    assert.equal(require(join(root, 'tools/state.cjs')), state);
+    assert.equal(require(join(root, 'tools/state.cjs')).value, 7);
+  });
+
+  test('workspace reporters and results processors are project-shared inputs', async () => {
+    const root = workspace({
+      'packages/app/jest.config.js':
+        "module.exports = { preset: '../../jest.preset.js', reporters: ['default', 'summary', 'github-actions', ['<rootDir>/reporter.cjs', {}], 'external-reporter'], testResultsProcessor: '<rootDir>/processor.cjs' };\n",
+      'packages/app/reporter.cjs': "require('./reporter-helper.cjs'); module.exports = class {};\n",
+      'packages/app/reporter-helper.cjs': 'module.exports = 1;\n',
+      'packages/app/processor.cjs': "require('./processor-helper.cjs'); module.exports = r => r;\n",
+      'packages/app/processor-helper.cjs': 'module.exports = 1;\n',
+      'node_modules/external-reporter/package.json': '{ "main": "index.cjs" }',
+      'node_modules/external-reporter/index.cjs': 'module.exports = class {};\n',
+    });
+    const project = await new JestProjects(root).load('packages/app/jest.config.js');
+    assert.ok(project.nodeLoaded.includes('packages/app/reporter.cjs'));
+    assert.ok(project.nodeLoaded.includes('packages/app/processor.cjs'));
+    assert.ok(project.nodeLoaded.every((file) => !file.includes('node_modules')));
+    for (const builtin of ['default', 'summary', 'github-actions']) {
+      assert.ok(!project.nodeLoaded.includes(builtin));
+    }
+    const byProject = await targets(root);
+    for (const file of [
+      'reporter.cjs',
+      'reporter-helper.cjs',
+      'processor.cjs',
+      'processor-helper.cjs',
+    ]) {
+      for (const target of Object.values(byProject['packages/app'])) {
+        assert.ok(target.inputs!.includes(WS + 'packages/app/' + file), file);
+      }
+      for (const target of Object.values(byProject['packages/lib'])) {
+        assert.ok(!target.inputs!.includes(WS + 'packages/app/' + file), file);
+      }
+    }
+  });
+
+  test('unknown plugin options fail graph construction with the allowed keys', async () => {
+    for (const key of ['resolve', 'testsPerShar']) {
+      await assert.rejects(targets(workspace(), { [key]: {} }), (error: Error) => {
+        assert.match(error.message, new RegExp(`unknown option '${key}'`));
+        assert.match(
+          error.message,
+          /allowed keys: testsPerShard, overrides, isolate, sharedInputs, maxClosureInputs/,
+        );
+        return true;
+      });
+    }
+    await targets(workspace(), {
+      testsPerShard: 1,
+      overrides: { 'packages/app': { testsPerShard: 2, maxClosureInputs: 100 } },
+      isolate: ['packages/app/src/a.test.js'],
+      sharedInputs: [{ env: 'WORK' }],
+      maxClosureInputs: 1000,
+    });
   });
 
   test('an environment with unknown export conditions fails unless the config declares them', async () => {

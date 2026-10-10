@@ -25,6 +25,7 @@ const Runtime = require('jest-runtime').default as typeof import('jest-runtime')
 const { ModuleMap } = require('jest-haste-map') as typeof import('jest-haste-map');
 const Resolver = require('jest-resolve').default as typeof import('jest-resolve').default;
 type JestResolver = InstanceType<typeof Resolver>;
+const configCacheEntries = new Map<string, Set<string>>();
 
 /**
  * A file path relative to the workspace root, a Node core module, a file Jest
@@ -180,9 +181,8 @@ export class JestProjects {
     // may have changed since: configs in Node's module cache, and the file
     // checks, real paths and package manifests jest-resolve keeps for the
     // whole process.
-    for (const file of Object.keys(require.cache)) {
-      if (classify(workspaceRoot, file).kind === 'workspace') delete require.cache[file];
-    }
+    for (const file of configCacheEntries.get(workspaceRoot) ?? []) delete require.cache[file];
+    configCacheEntries.delete(workspaceRoot);
     Resolver.clearDefaultResolverCache();
     this.node = new ResolutionContext(
       'node',
@@ -205,71 +205,92 @@ export class JestProjects {
 
   /** Loads one config with Jest's loader: presets, async and TypeScript configs included. */
   async load(configFile: string): Promise<JestProject> {
-    const path = join(this.#workspaceRoot, configFile);
-    const fail = (message: string): never => {
-      throw new Error(`jest-shards: ${configFile}: ${message}`);
-    };
-    // The one evaluation of the config file. Normalizing the options it
-    // returned, instead of the path, keeps an async config from running twice.
-    const { config: initial } = await readInitialOptions(path);
-    if (initial.projects) fail('multi-project (`projects:`) configs are not supported');
-    const preset = initial.preset;
-    const { projectConfig, globalConfig } = await readConfig(
-      { _: [], $0: '' },
-      initial,
-      false,
-      dirname(path),
-    );
-
-    const conditions = exportConditions(projectConfig) ?? fail(UNKNOWN_ENVIRONMENT);
-    // Everything Jest's resolver reads. `rootDir` is already substituted into
-    // these, and it only matters on its own to a custom resolver.
-    const key = JSON.stringify([
-      projectConfig.moduleNameMapper,
-      projectConfig.moduleDirectories,
-      projectConfig.modulePaths,
-      projectConfig.moduleFileExtensions,
-      projectConfig.haste.defaultPlatform,
-      projectConfig.haste.platforms,
-      projectConfig.resolver ? [projectConfig.resolver, projectConfig.rootDir] : null,
-      conditions,
-    ]);
-    let context = this.#contexts.get(key);
-    if (!context) {
-      context = new ResolutionContext(
-        key,
-        this.#workspaceRoot,
-        Runtime.createResolver(projectConfig, ModuleMap.create(projectConfig.rootDir)),
-        [conditions],
-        (projectConfig.moduleNameMapper ?? []).map(([pattern]) => new RegExp(pattern)),
+    return this.trackConfigLoad(async () => {
+      const path = join(this.#workspaceRoot, configFile);
+      const fail = (message: string): never => {
+        throw new Error(`jest-shards: ${configFile}: ${message}`);
+      };
+      // The one evaluation of the config file. Normalizing the options it
+      // returned, instead of the path, keeps an async config from running twice.
+      const { config: initial } = await readInitialOptions(path);
+      if (initial.projects) fail('multi-project (`projects:`) configs are not supported');
+      const preset = initial.preset;
+      const { projectConfig, globalConfig } = await readConfig(
+        { _: [], $0: '' },
+        initial,
+        false,
+        dirname(path),
       );
-      this.#contexts.set(key, context);
-    }
 
-    return {
-      configFile,
-      rootDir: projectConfig.rootDir,
-      context,
-      nodeLoaded: this.#workspaceFiles(fail, [
-        path,
-        presetFile(preset, projectConfig.rootDir),
-        ...projectConfig.transform.map(([, transformer]) => transformer),
-        projectConfig.resolver,
-        projectConfig.testEnvironment,
-        projectConfig.testRunner,
-        projectConfig.runner,
-        projectConfig.globalSetup,
-        projectConfig.globalTeardown,
-        projectConfig.snapshotResolver,
-        projectConfig.dependencyExtractor,
-        globalConfig.testSequencer,
-      ]),
-      jestLoaded: this.#workspaceFiles(fail, [
-        ...projectConfig.setupFiles,
-        ...projectConfig.setupFilesAfterEnv,
-        ...projectConfig.snapshotSerializers,
-      ]),
-    };
+      const conditions = exportConditions(projectConfig) ?? fail(UNKNOWN_ENVIRONMENT);
+      // Everything Jest's resolver reads. `rootDir` is already substituted into
+      // these, and it only matters on its own to a custom resolver.
+      const key = JSON.stringify([
+        projectConfig.moduleNameMapper,
+        projectConfig.moduleDirectories,
+        projectConfig.modulePaths,
+        projectConfig.moduleFileExtensions,
+        projectConfig.haste.defaultPlatform,
+        projectConfig.haste.platforms,
+        projectConfig.resolver ? [projectConfig.resolver, projectConfig.rootDir] : null,
+        conditions,
+      ]);
+      let context = this.#contexts.get(key);
+      if (!context) {
+        context = new ResolutionContext(
+          key,
+          this.#workspaceRoot,
+          Runtime.createResolver(projectConfig, ModuleMap.create(projectConfig.rootDir)),
+          [conditions],
+          (projectConfig.moduleNameMapper ?? []).map(([pattern]) => new RegExp(pattern)),
+        );
+        this.#contexts.set(key, context);
+      }
+
+      return {
+        configFile,
+        rootDir: projectConfig.rootDir,
+        context,
+        nodeLoaded: this.#workspaceFiles(fail, [
+          path,
+          presetFile(preset, projectConfig.rootDir),
+          ...projectConfig.transform.map(([, transformer]) => transformer),
+          projectConfig.resolver,
+          projectConfig.testEnvironment,
+          projectConfig.testRunner,
+          projectConfig.runner,
+          projectConfig.globalSetup,
+          projectConfig.globalTeardown,
+          projectConfig.snapshotResolver,
+          projectConfig.dependencyExtractor,
+          globalConfig.testResultsProcessor,
+          globalConfig.testSequencer,
+          ...(globalConfig.reporters ?? []).map(([reporter]) => reporter),
+        ]),
+        jestLoaded: this.#workspaceFiles(fail, [
+          ...projectConfig.setupFiles,
+          ...projectConfig.setupFilesAfterEnv,
+          ...projectConfig.snapshotSerializers,
+        ]),
+      };
+    });
+  }
+
+  /** Also tracks config modules loaded by stock Nx discovery before Jest normalization. */
+  async trackConfigLoad<T>(load: () => Promise<T>): Promise<T> {
+    const before = new Set(Object.keys(require.cache));
+    try {
+      return await load();
+    } finally {
+      // Include modules added before a failed load too, so the next build can retry.
+      const added = configCacheEntries.get(this.#workspaceRoot) ?? new Set<string>();
+      for (const file of Object.keys(require.cache)) {
+        if (!before.has(file) && classify(this.#workspaceRoot, file).kind === 'workspace') {
+          added.add(file);
+        }
+      }
+      configCacheEntries.set(this.#workspaceRoot, added);
+    }
   }
 
   #workspaceFiles(
