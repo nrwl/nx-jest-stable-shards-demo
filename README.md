@@ -187,6 +187,8 @@ Notes on the results:
 - An edit to the owner's `project.json` selects all of its shards, with no input listing it. The matrix row edits `tags`, which Nx hashes, so the shards also miss. An edit to a field Nx does not hash, such as `description`, still selects them, but they stay cache hits because no task definition changed.
 - Under the closure cap, a shard's source inputs widen to directory or project-root globs. Selection then includes sibling shards whose tests live in the same directories or roots. Member tests stay exact, so parity is unaffected.
 
+The script uses fresh local cache directories and sets `NX_NO_CLOUD=true` for its Nx runs, so repeated runs on the same head neither read from nor write to the Nx Cloud remote cache.
+
 Rerun the matrix with a clean working tree; it reverts every change it makes:
 
 ```sh
