@@ -59,6 +59,8 @@ Node 24 or later runs the TypeScript directly. The directory's `package.json` ma
 
 There is no resolution option. Imports resolve through each project's own Jest configuration.
 
+Unknown option keys fail graph construction, naming the key and the allowed keys.
+
 ## How tests are assigned
 
 - `bucketCount` is the smallest power of two that keeps (non-isolated tests) / `bucketCount` at or under `testsPerShard`.

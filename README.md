@@ -25,7 +25,7 @@ test -n "$SHARD_TARGETS"
 pnpm exec nx run-many -t "$SHARD_TARGETS" --parallel=3
 ```
 
-Expect `PARITY OK`, `50/50 rows pass` from the mapper fixture and 64 successful tasks. `nx.json` points to the demo's Nx Cloud staging workspace; local checks need no CI token. To generate all 21,093 tests, run `node scripts/generate-fixture.ts --preset full`; this replaces `packages/`, so do it in a disposable checkout. Generate `--preset smoke` there to restore the smoke fixture.
+Expect `PARITY OK`, `51/51 rows pass` from the mapper fixture and 64 successful tasks. `nx.json` points to the demo's Nx Cloud staging workspace; local checks need no CI token. To generate all 21,093 tests, run `node scripts/generate-fixture.ts --preset full`; this replaces `packages/`, so do it in a disposable checkout. Generate `--preset smoke` there to restore the smoke fixture.
 
 ## 1. The problem
 
@@ -67,7 +67,7 @@ Each `test-ci--kk` target runs `jest -c jest.config.js --shard=k/shardCount --ru
 
 The plugin has no alias option. It loads every `jest.config.*` with Jest's own loader and resolves each import with that project's Jest resolver, so `moduleNameMapper`, `<rootDir>`, module directories and package export conditions apply exactly as they do when the test runs. One shared file imported by two projects can therefore have two closures. A workspace import Jest cannot resolve fails the graph with the project and config, the importer, the specifier and why the workspace owns it (a relative path, a workspace package or scope, a name a mapper claims). So does a file Nx does not hash, whether a test imports it or the config loads it: the plugin checks every input against Nx's own file inventory, so `.nxignore`, nested ignore files and tracked files that match an ignore rule are all caught.
 
-Each graph build evaluates a config once and starts from empty resolver caches, so a long-lived graph process sees a changed manifest or a newly created file. The files Node loads itself (the config, its preset, transformers) can reach a package that exports different files to `import` and `require`; both are inputs.
+Each graph build evaluates a config once, evicts only workspace CommonJS cache entries added by prior config loads, and starts from empty resolver caches, so a long-lived graph process sees a changed manifest or a newly created file. The files Node loads itself (the config, its preset, transformers) can reach a package that exports different files to `import` and `require`; both are inputs.
 
 `fixtures/mappers` is a small workspace of its own with three projects and seventeen resolution cases: one specifier mapped differently by three configs, overlapping patterns in both orders, capture groups, a replacement array, replacements that name a linked workspace package and a third-party package, a mapped mock with a nested import, a `rootDir` below the project root, `modulePaths`, export conditions, and a package whose `main` is an absent, gitignored build output. `fixtures/mappers/cases.json` records the file each case must resolve to. `pnpm mappers` copies the fixture to a throwaway workspace and checks, with real Nx and Jest:
 
@@ -76,7 +76,12 @@ Each graph build evaluates a config once and starts from empty resolver caches, 
 - editing each resolved file makes exactly the dependent shards miss the cache;
 - changing only a mapper in a Jest config changes the closure;
 - cold and warm graph builds produce the same targets;
+- adding an import to a non-config file on a warm graph cache grows the importing shard's inputs;
 - twelve broken variants (an unmapped package with a missing `main`, the same with a gitignored build present, a gitignored setup file that nothing imports, a setup file `.nxignore` excludes, a setup file Git tracks and `.gitignore` matches, an unresolvable specifier, a mapper to missing files, a missing relative file, a missing shared file, an unscoped and a scoped package linked from `node_modules` to a directory outside the workspace, a `rootDir` outside the project) fail graph construction and name the cause.
+
+### Not supported
+
+- Native ESM tests: imports resolve under CommonJS (`require`) export conditions. A test Jest runs as native ESM may select a different file from a dual package. The plugin does not infer the ESM condition set.
 
 ## 3. Membership equals Jest
 

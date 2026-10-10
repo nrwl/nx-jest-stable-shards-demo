@@ -280,6 +280,27 @@ attempt(
   },
 );
 
+attempt(
+  'Add an import to a non-config file on a warm graph cache',
+  "the importing shard's inputs grow without changing any config",
+  () => {
+    const before = plan();
+    const [shard] = shardsWith(before, cases['alpha/ui-button'].test);
+    const leaf = 'apps/alpha/src/ui/warm-leaf.js';
+    writeFileSync(join(ws, leaf), 'module.exports = 1;\n');
+    appendFileSync(join(ws, 'apps/alpha/src/ui/special-button.js'), "require('./warm-leaf');\n");
+    const after = plan();
+    const previous = before.get(shard)!.inputs;
+    const inputs = after.get(shard)!.inputs;
+    const ok =
+      !previous.includes(WS + leaf) &&
+      inputs.includes(WS + leaf) &&
+      inputs.length > previous.length &&
+      previous.every((input) => inputs.includes(input));
+    return [`\`${shard}\`: ${previous.length} inputs before, ${inputs.length} after`, ok];
+  },
+);
+
 // 6. Nothing the workspace owns is dropped, and nothing Nx does not hash is
 // an input: each of these must fail graph construction, so no cached result
 // exists to go stale.
