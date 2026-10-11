@@ -61,13 +61,15 @@ export async function inferShards(
 ) {
   const discoveryStarted = performance.now();
   const options = normalizeOptions(rawOptions);
-  const projects = await discover(configFiles, context);
+  // Evict the previous config loads before stock discovery sees cached configs:
+  // its cache clearing would otherwise also discard unrelated workspace modules.
+  const jest = new JestProjects(context.workspaceRoot);
+  const projects = await jest.trackConfigLoad(() => discover(configFiles, context));
   if (measurements) measurements.discoveryMs = performance.now() - discoveryStarted;
   const resolutionStarted = performance.now();
   const testFiles = projects.flatMap((p) => p.tests.map((t) => join(p.root, t)));
   checkDiscovery(testFiles, options.isolate);
 
-  const jest = new JestProjects(context.workspaceRoot);
   const loaded = new Map<string, JestProject>();
   for (const project of projects) {
     const jestProject = await jest.load(project.configFile);

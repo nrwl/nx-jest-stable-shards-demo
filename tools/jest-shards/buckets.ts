@@ -18,14 +18,20 @@ export interface ShardOptions {
 export const PLUGIN_PATH = './tools/jest-shards/plugin.ts';
 
 export function normalizeOptions(raw: Partial<ShardOptions> = {}): ShardOptions {
-  const options: ShardOptions = {
+  const defaults: ShardOptions = {
     testsPerShard: 25,
     overrides: {},
     isolate: [],
     sharedInputs: [],
     maxClosureInputs: 1000,
-    ...raw,
   };
+  const allowed = Object.keys(defaults);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.includes(key)) {
+      throw new Error(`jest-shards: unknown option '${key}'; allowed keys: ${allowed.join(', ')}`);
+    }
+  }
+  const options: ShardOptions = { ...defaults, ...raw };
   const duplicate = options.isolate.find((path, i) => options.isolate.indexOf(path) !== i);
   if (duplicate) throw new Error(`jest-shards: isolate lists ${duplicate} twice`);
   // A non-positive or non-finite size would never let bucketCount settle.
